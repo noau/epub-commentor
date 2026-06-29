@@ -67,3 +67,16 @@ class Zip:
     def replace(self, path: Path) -> IO[bytes]:
         self._processed_files.add(path)
         return self._target_zip.open(path.as_posix(), "w")
+
+    def add(self, path: Path, data: bytes | bytearray | IO[bytes]) -> None:
+        """添加一个新文件到 target ZIP（不复制 source 中已有的同名文件）。
+
+        用于注入新资源（如 commentary.css）。如果 ``data`` 是 IO 句柄，会被完整读取。
+        """
+        path_str = path.as_posix()
+        if isinstance(data, (bytes, bytearray)):
+            self._target_zip.writestr(path_str, bytes(data), compress_type=zipfile.ZIP_DEFLATED)
+        else:
+            with data as f:
+                self._target_zip.writestr(path_str, f.read(), compress_type=zipfile.ZIP_DEFLATED)
+        self._processed_files.add(path)

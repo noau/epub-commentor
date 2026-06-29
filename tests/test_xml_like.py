@@ -3,7 +3,7 @@ import unittest
 from typing import cast
 from xml.etree.ElementTree import Element
 
-from epub_translator.xml.xml_like import XMLLikeNode
+from epub_commentor.xml.xml_like import XMLLikeNode
 
 
 class TestXMLLikeNode(unittest.TestCase):

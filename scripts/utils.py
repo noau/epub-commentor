@@ -2,24 +2,28 @@ import json
 import shutil
 from pathlib import Path
 
-from epub_translator import LLM
+from epub_commentor import LLM
 
 
-def load_llm(**args):
+def load_comment_llm(**args) -> LLM:
+    """Read format.json from the repo root and construct a single LLM for commentary.
+
+    format.json schema (flat, no translation/fill sub-keys):
+    {
+      "key": "<API key>",
+      "url": "<base url>",
+      "model": "<model name>",
+      "token_encoding": "<tiktoken encoding name>",
+      "timeout": 360.0,
+      "retry_times": 5,
+      "retry_interval_seconds": 6.0,
+      "temperature": 0.4,
+      "top_p": 0.9,
+      "cache_path": "<optional cache dir>"
+    }
+    """
     config = read_format_json()
-    translation_config = config.pop("translation", {})
-    fill_config = config.pop("fill", {})
-    translate_llm = LLM(
-        **config,
-        **translation_config,
-        **args,
-    )
-    fill_llm = LLM(
-        **config,
-        **fill_config,
-        **args,
-    )
-    return translate_llm, fill_llm
+    return LLM(**config, **args)
 
 
 def read_format_json() -> dict:

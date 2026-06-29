@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from epub_translator.epub.metadata import MetadataField, read_metadata, write_metadata
-from epub_translator.epub.zip import Zip
+from epub_commentor.epub.metadata import MetadataField, read_metadata, write_metadata
+from epub_commentor.epub.zip import Zip
 from tests.utils import create_temp_dir_fixture
 
 # 创建 metadata 专用的临时目录 fixture

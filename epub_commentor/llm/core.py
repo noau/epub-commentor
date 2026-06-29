@@ -38,7 +38,7 @@ class LLM:
         log_dir_path: PathLike | str | None = None,
         extra_body: dict[str, object] | None = None,
     ) -> None:
-        prompts_path = Path(str(files("epub_translator"))) / "data"
+        prompts_path = Path(str(files("epub_commentor"))) / "data"
         self._templates: dict[str, Template] = {}
         self._encoding: Encoding = get_encoding(token_encoding)
         self._env: Environment = create_env(prompts_path)

@@ -1,13 +1,13 @@
 [project]
-name = "epub-translator"
-version = "0.1.11"
-description = "Translate the epub book using LLM. The translated book will retain the original text and list the translated text side by side with the original text."
-keywords = ["epub", "llm", "translation", "translator"]
+name = "epub-commentor"
+version = "0.1.0"
+description = "Add AI-generated commentary (introductions, summaries, marginalia) to EPUB books using LLM. Fork of epub-translator."
+keywords = ["epub", "llm", "commentary", "annotation", "ebook"]
 authors = [
-    {name = "Tao Zeyu", email = "i@taozeyu.com"}
+    {name = "Dexter Chen", email = "dexter@example.com"}
 ]
 maintainers = [
-    {name = "Tao Zeyu", email = "i@taozeyu.com"}
+    {name = "Dexter Chen", email = "dexter@example.com"}
 ]
 license = {text = "MIT"}
 readme = "README.md"
@@ -24,21 +24,22 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: Software Development :: Localization",
     "Topic :: Text Processing :: Markup",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
     "tiktoken>=0.12.0,<1.0.0",
     "jinja2>=3.1.6,<4.0.0",
-    "resource-segmentation>=0.0.7,<0.1.0",
     "openai>=2.14.0,<3.0.0",
-    "mathml2latex (>=0.2.12,<0.3.0)",
+    "pydantic>=2.5,<3.0",
 ]
 
+[project.scripts]
+epub-commentor = "epub_commentor.cli:main"
+
 [project.urls]
-Homepage = "https://hub.oomol.com/package/books-translator"
-Repository = "https://github.com/oomol-lab/epub-translator"
+Homepage = "https://github.com/your-org/epub-commentor"
+Repository = "https://github.com/your-org/epub-commentor"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -46,7 +47,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 packages = [
-    {include = "epub_translator" }
+    {include = "epub_commentor" }
 ]
 
 [tool.poetry.group.dev.dependencies]
