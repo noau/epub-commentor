@@ -1,0 +1,37 @@
+{
+  "id": "case01_basic_intro_summary",
+  "description": "6-paragraph chapter with one intro (p0) and one summary (p5).",
+  "block_size": 6,
+  "chapter": {
+    "path": "ch01.xhtml",
+    "title": "Chapter 1",
+    "paragraphs": [
+      "It was the best of times, it was the worst of times.",
+      "It was the age of wisdom, it was the age of foolishness.",
+      "We were all going direct to Heaven, we were all going direct the other way.",
+      "In short, the period was so far like the present period.",
+      "There were a king with a large jaw and a queen with a plain face.",
+      "They were standing in the shop-window of a fashionable house."
+    ]
+  },
+  "memo": {
+    "core_thesis": "A series of contrasts opens the novel.",
+    "outline": ["contrasts", "wisdom and foolishness", "kings and queens"],
+    "tone": "didactic",
+    "target_audience": "general readers",
+    "key_terms": [],
+    "reading_anchors": ["the opening paradox"]
+  },
+  "block_responses": [
+    {
+      "comments": [
+        {"target_p_ids": [0], "position": "before", "kind": "intro", "content": "Dickens opens with a cascade of antitheses that frames the novel as a study in extremes."},
+        {"target_p_ids": [5], "position": "after", "kind": "summary", "content": "The chapter ends by grounding the abstractions in a very specific image: a king and queen in a shop window."}
+      ]
+    }
+  ],
+  "expected_comments": [
+    {"target_p_ids": [0], "position": "before", "kind": "intro", "content": "Dickens opens with a cascade of antitheses that frames the novel as a study in extremes."},
+    {"target_p_ids": [5], "position": "after", "kind": "summary", "content": "The chapter ends by grounding the abstractions in a very specific image: a king and queen in a shop window."}
+  ]
+}

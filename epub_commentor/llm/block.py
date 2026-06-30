@@ -18,8 +18,8 @@ from pydantic import ValidationError
 
 from ..config import CommentConfig
 from ..errors import CommentInvalidJSONError, CommentOrphanPIdError, CommentOverlapError
-from .core import LLM
-from .schema import BlockAnnotation, ChapterMemo, CommentPosition, validate_block_annotations
+from .protocol import LLMProtocol
+from .schema import BlockAnnotation, ChapterMemo, validate_block_annotations
 from .types import Message, MessageRole
 
 try:
@@ -95,7 +95,7 @@ def annotate_block(
     block_start_idx: int,
     chapter_hash: str,
     memo: ChapterMemo,
-    llm: LLM,
+    llm: LLMProtocol,
     config: CommentConfig,
 ) -> list:
     """Run Stage 2 for a single block of paragraphs.
@@ -157,7 +157,4 @@ def annotate_block(
 
 
 # Ensure the public schema re-exports flow through this module
-_ = CommentPosition  # re-export hint for static analysers
-
-
 __all__ = ["annotate_block"]

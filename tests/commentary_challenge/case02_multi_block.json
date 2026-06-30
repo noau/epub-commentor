@@ -1,0 +1,41 @@
+{
+  "id": "case02_multi_block",
+  "description": "12 paragraphs, block_size=4, three blocks each with one note. Verifies absolute p_id translation across blocks.",
+  "block_size": 4,
+  "chapter": {
+    "path": "ch02.xhtml",
+    "title": "Chapter 2",
+    "paragraphs": [
+      "P0 — first paragraph.",
+      "P1 — second paragraph.",
+      "P2 — third paragraph.",
+      "P3 — fourth paragraph.",
+      "P4 — fifth paragraph.",
+      "P5 — sixth paragraph.",
+      "P6 — seventh paragraph.",
+      "P7 — eighth paragraph.",
+      "P8 — ninth paragraph.",
+      "P9 — tenth paragraph.",
+      "P10 — eleventh paragraph.",
+      "P11 — twelfth paragraph."
+    ]
+  },
+  "memo": {
+    "core_thesis": "A flat prose chapter that needs vocabulary glosses.",
+    "outline": ["intro", "body", "outro"],
+    "tone": "expository",
+    "target_audience": "students",
+    "key_terms": [],
+    "reading_anchors": []
+  },
+  "block_responses": [
+    {"comments": [{"target_p_ids": [0], "position": "before", "kind": "note", "content": "Block 0 note on p0."}]},
+    {"comments": [{"target_p_ids": [2], "position": "after", "kind": "note", "content": "Block 1 note on p6 absolute (block-local p2)."}]},
+    {"comments": [{"target_p_ids": [3], "position": "before", "kind": "note", "content": "Block 2 note on p11 absolute (block-local p3)."}]}
+  ],
+  "expected_comments": [
+    {"target_p_ids": [0], "position": "before", "kind": "note", "content": "Block 0 note on p0."},
+    {"target_p_ids": [6], "position": "after", "kind": "note", "content": "Block 1 note on p6 absolute (block-local p2)."},
+    {"target_p_ids": [11], "position": "before", "kind": "note", "content": "Block 2 note on p11 absolute (block-local p3)."}
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "id": "case07_short_block_tail",
+  "description": "Last block has fewer paragraphs than block_size. Verifies the partial-tail block runs cleanly.",
+  "block_size": 5,
+  "chapter": {
+    "path": "ch07.xhtml",
+    "title": "Chapter 7",
+    "paragraphs": [
+      "P0", "P1", "P2", "P3", "P4", "P5", "P6"
+    ]
+  },
+  "memo": {
+    "core_thesis": "Seven paragraphs spanning two blocks (5 + 2).",
+    "outline": ["a", "b", "c"],
+    "tone": "neutral",
+    "target_audience": "all",
+    "key_terms": [],
+    "reading_anchors": []
+  },
+  "block_responses": [
+    {"comments": [{"target_p_ids": [4], "position": "after", "kind": "summary", "content": "end of first block"}]},
+    {"comments": [{"target_p_ids": [1], "position": "after", "kind": "summary", "content": "end of short tail block (block-local 1, absolute 6)"}]}
+  ],
+  "expected_comments": [
+    {"target_p_ids": [4], "position": "after", "kind": "summary", "content": "end of first block"},
+    {"target_p_ids": [6], "position": "after", "kind": "summary", "content": "end of short tail block (block-local 1, absolute 6)"}
+  ]
+}

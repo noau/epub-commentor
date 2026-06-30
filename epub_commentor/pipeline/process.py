@@ -20,8 +20,8 @@ from pathlib import Path
 from ..config import CommentConfig
 from ..errors import CommentNoParagraphsError
 from ..llm.block import annotate_block
-from ..llm.core import LLM
 from ..llm.memo import scan_chapter
+from ..llm.protocol import LLMProtocol
 from ..llm.schema import ChapterMemo, CommentItem
 from .extract import Chapter
 
@@ -79,7 +79,7 @@ def _split_blocks(chapter: Chapter, block_size: int) -> list[tuple[int, list]]:
 def _process_chapter(
     chapter: Chapter,
     book_metadata: dict[str, str],
-    llm: LLM,
+    llm: LLMProtocol,
     config: CommentConfig,
 ) -> ChapterAnnotation:
     """Stage 1 + Stage 2 for a single chapter (sequential per chapter).
@@ -147,7 +147,7 @@ def _process_chapter(
 def process_chapters(
     chapters: list[Chapter],
     book_metadata: dict[str, str],
-    llm: LLM,
+    llm: LLMProtocol,
     config: CommentConfig,
 ) -> list[ChapterAnnotation]:
     """Run Stage 1 + Stage 2 across all chapters.

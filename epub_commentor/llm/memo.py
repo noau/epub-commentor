@@ -21,7 +21,7 @@ from pydantic import ValidationError
 from ..config import CommentConfig
 from ..errors import CommentScanFailedError
 from ..xml import plain_text
-from .core import LLM
+from .protocol import LLMProtocol
 from .schema import ChapterMemo
 from .types import Message, MessageRole
 
@@ -57,7 +57,7 @@ def scan_chapter(
     chapter_path: Path,
     chapter_title: str,
     book_metadata: dict[str, str],
-    llm: LLM,
+    llm: LLMProtocol,
     config: CommentConfig,
 ) -> ChapterMemo:
     """Run Stage 1 for a single chapter.

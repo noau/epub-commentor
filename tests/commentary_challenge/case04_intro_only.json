@@ -1,0 +1,33 @@
+{
+  "id": "case04_intro_only",
+  "description": "An intro comment on a short chapter — verifies kind/position handling with no other comments.",
+  "block_size": 4,
+  "chapter": {
+    "path": "ch04.xhtml",
+    "title": "Chapter 4",
+    "paragraphs": [
+      "Call me Ishmael.",
+      "Some years ago—never mind how long precisely—having little or no money in my purse.",
+      "Nothing particular to interest me on shore.",
+      "I thought I would sail about a little and see the watery part of the world."
+    ]
+  },
+  "memo": {
+    "core_thesis": "Moby-Dick's famous opening line and the narrator's self-introduction.",
+    "outline": ["intro", "pretext", "decision to sail"],
+    "tone": "lyrical",
+    "target_audience": "literary readers",
+    "key_terms": [],
+    "reading_anchors": ["Call me Ishmael"]
+  },
+  "block_responses": [
+    {
+      "comments": [
+        {"target_p_ids": [0], "position": "before", "kind": "intro", "content": "One of the most quoted openings in English — the narrator's self-naming is also a withdrawal from full identity."}
+      ]
+    }
+  ],
+  "expected_comments": [
+    {"target_p_ids": [0], "position": "before", "kind": "intro", "content": "One of the most quoted openings in English — the narrator's self-naming is also a withdrawal from full identity."}
+  ]
+}
