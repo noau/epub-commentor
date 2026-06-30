@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 原项目文档：https://github.com/oomol-lab/epub-translator
 - Python ≥ 3.11，依赖管理使用 Poetry
 
-> **进度：M1-M7a 完成（包重命名 / 两阶段 LLM / 注入 / 校验 / 测试 / CLI / 进度条 + debug 日志），M7b 真实 LLM 联调待实施**。CLAUDE.md 中标注 `[已实现]` / `[待实施]` 的章节反映这一状态。
+> **进度：M1-M8 完成（包重命名 / 两阶段 LLM / 注入 / 校验 / 测试 / CLI / 进度条 + debug 日志 / 交互式章节选择），M7b 真实 LLM 联调待实施**。CLAUDE.md 中标注 `[已实现]` / `[待实施]` 的章节反映这一状态。
 
 ## 常用命令
 
@@ -63,7 +63,7 @@ poetry run pyright epub_commentor
 - `tests/commentary_challenge/case01..case10.json` — 10 个手工挑出的评注故障样例，由 `scripts/comment_challenge.py` 走 `MockLLM` 跑 `process_chapters` 回归
 - `tests/_mock_llm.py` — `MockLLM` + `json_dumps`，按 cache seed 前缀（`:scan:` / `:annotate:`）分发预制 JSON；附带 `calls` 日志用于断言
 
-**测试覆盖**（M1-M7a 完成后，共 185 用例 / 60 subtests，约 182 passing — 历史遗留三处失败 `test_xml_like::test_header_with_whitespace_and_newlines` / `test_commentor_schema::test_minimum_outline_required` / `test_maximum_outline` 与本任务无关，pre-existing）：
+**测试覆盖**（M1-M8 完成后，约 197 用例 / 60 subtests，约 194 passing — 历史遗留三处失败 `test_xml_like::test_header_with_whitespace_and_newlines` / `test_commentor_schema::test_minimum_outline_required` / `test_maximum_outline` 与本任务无关，pre-existing）：
 
 - `test_xml_like.py` / `test_self_closing.py` / `test_metadata.py` / `test_spines.py` / `test_toc.py` / `test_math.py` — 原 EPUB / XML 基础
 - `test_zip.py` — `Zip.add()` 注入新文件
@@ -72,11 +72,11 @@ poetry run pyright epub_commentor
 - `test_commentor_errors.py` — `CommentorError` 五子类语义
 - `test_commentor_block.py` — Stage 2 切组、retry、空章节
 - `test_commentor_inject.py` — aside 注入、parent_map、OPF manifest、head link
-- `test_commentor_pipeline.py` — extract → process → inject 串行 + `ProgressEvent` 进度事件断言
+- `test_commentor_pipeline.py` — extract → process → inject 串行 + `ProgressEvent` 进度事件断言 + `TestChapterFilter`（mask 长度 / 内容校验 / 顺序）
 - `test_commentor_log.py` — `[[StageError]]` / `[[FinalError]]` / `[[CacheCheck]]` 日志段断言（用 `MockLLM(log_dir_path=...)`）
 - `test_commentor_css.py` — `commentary.css` 字节校验（color / shadow / `break-inside: avoid`）
 - `test_commentor_e2e.py` — 拿真实《小王子》EPUB 端到端跑一遍
-- `test_commentor_cli.py` — argparse / `format.json` 解析 / 进度回调
+- `test_commentor_cli.py` — argparse / `format.json` 解析 / 进度回调 + `TestBuildChapterFilter`（`-i` 默认 / TTY / 非 TTY / 短旗标）
 
 ## 架构
 
@@ -84,12 +84,13 @@ poetry run pyright epub_commentor
 
 ### 顶层入口（`epub_commentor/__init__.py`）
 
-公开 API（M1-M7a 完成态）：
+公开 API（M1-M8 完成态）：
 
 - LLM：`LLM`、`Message`、`MessageRole`
 - 配置 / 数据类：`CommentConfig`、`CommentKind`、`CommentPosition`、`ChapterAnnotation`、`CommentorResult`
-- 顶层编排：`comment_epub(source, output, llm, config, progress_callback) -> CommentorResult`（阶段汇报顺序：`extract` → `process` → `inject`）
+- 顶层编排：`comment_epub(source, output, llm, config, progress_callback, chapter_filter) -> CommentorResult`（阶段汇报顺序：`extract` → `process` → `inject`；`chapter_filter` 可选，详见下文）
 - 进度回调：`ProgressCallback`（`Callable[[ProgressEvent], None]`）+ `ProgressEvent` dataclass + `make_default_progress_callback(quiet)` 工厂；CLI 默认装一个 `tqdm` 双层 bar 渲染器
+- 章节过滤回调：`ChapterFilter`（`Callable[[list[Chapter]], list[bool]]`）— 返回与 spine 顺序等长的 bool mask，`True` 保留、`False` 跳过；CLI 在 `-i`/`--interactive` 下弹 questionary checkbox 多选
 - 提取 / 注入：`Chapter`、`extract_chapters`（pipeline 内）、`inject_annotations`（pipeline 内）
 - 异常：`CommentorError(ValueError)` + 五个子类（`CommentInvalidJSONError`、`CommentOrphanPIdError`、`CommentOverlapError`、`CommentScanFailedError`、`CommentNoParagraphsError`）
 
@@ -217,6 +218,7 @@ EPUB Commentor 把 AI 评注定位为**页边的陪伴者**，而不是居高临
 - 新增 LLM provider 走 `llm/executor.py:LLMExecutor`（默认就是 OpenAI 兼容，无需改 SDK）；其他类型错误在 `llm/error.py` 加判定
 - 改 `epub/zip.py` 要保证 mimetype 是 ZIP 的第一个 entry（在 `comment_epub()` 主循环里显式 `migrate`）
 - 改 CLI 旗标时同步更新 `tests/test_commentor_cli.py`（`test_minimal_invocation`、`test_all_flags`）
+- 改 `--interactive` / `ChapterFilter` 行为时同步更新 `tests/test_commentor_cli.py::TestBuildChapterFilter`（`-i` / TTY / 非 TTY 矩阵）与 `tests/test_commentor_pipeline.py::TestChapterFilter`（mask 长度 / 内容 / 顺序）；`mask` 校验失败抛 `ValueError`（不是 `CommentorError`），属程序员错误
 - 改 `data/commentary.css` 时，本地跑 `pytest tests/test_commentor_css.py` 验证 CSS 字节被正确写入且符合 e-ink 约束（无 color / box-shadow，`break-inside: avoid` 必备）
 - 接新 LLM 测试时，先用 `tests/_mock_llm.MockLLM` 走 `process_chapters` 验证流水线，再用真 LLM 跑 `comment_challenge.py`
 
@@ -232,5 +234,6 @@ EPUB Commentor 把 AI 评注定位为**页边的陪伴者**，而不是居高临
 | M6 CLI | ✅ 完成 | `scripts/comment_epub.py` + `commentor.py` + `cli.py` + entrypoint |
 | M7a 进度条 + Debug 日志 | ✅ 完成 | `epub_commentor/progress.py` (`ProgressEvent` / `TqdmProgressDisplay`) + `epub_commentor/llm/_debug_logger.py` + `[[CacheCheck]] / [[StageError]] / [[FinalError]]` 段 + `--log-dir` / `--debug` CLI 旗标 + `MockLLM(log_dir_path=...)` + `tests/test_commentor_log.py` |
 | M7b 真实 LLM 联调 | ⏳ 待实施 | 用 OpenAI 跑《The little prince》全本，验证样式、缓存、token 用量、Kindle 兼容性 |
+| M8 交互式章节选择 | ✅ 完成 | `ChapterFilter` callback (`Callable[[list[Chapter]], list[bool]]`) + `comment_epub(chapter_filter=...)` kwarg + `--interactive` / `-i` CLI 旗标（questionary checkbox，空章节默认不勾选，非 TTY 直接 `exit 2`）+ tqdm 在 `-i` 下自动静默 |
 
 详细 PRD 见 `plans/this-is-a-forked-encapsulated-seal.md`。

@@ -11,6 +11,7 @@ its lifecycle because the same ZIP will also be used by the inject layer
 for ``zip.replace(...)``.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree.ElementTree import Element
@@ -35,6 +36,15 @@ class Chapter:
     title: str
     body: Element
     xml_node: XMLLikeNode = field(repr=False)
+
+
+# Type alias for an optional chapter-filter callback supplied by the caller.
+# The callback receives the spine-ordered list of chapters and returns a
+# parallel ``list[bool]`` mask: ``mask[i] = True`` keeps chapter ``i``,
+# ``mask[i] = False`` drops it from the run. Dropped chapters are never
+# passed to ``process_chapters``; their bytes flow through ``Zip.__exit__``
+# as-is, so no restoration logic is required.
+ChapterFilter = Callable[[list[Chapter]], list[bool]]
 
 
 def _first_text(elem: Element) -> str:
@@ -100,4 +110,4 @@ def extract_chapters(zip: Zip) -> tuple[list[Chapter], dict[str, str]]:
     return chapters, metadata_dict
 
 
-__all__ = ["Chapter", "extract_chapters"]
+__all__ = ["Chapter", "ChapterFilter", "extract_chapters"]

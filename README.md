@@ -140,7 +140,7 @@ comment_epub(source="book.epub", llm=llm, config=config, progress_callback=log_p
 
 ## API Reference
 
-### `comment_epub(source, output=None, *, llm, config=None, progress_callback=None) -> CommentorResult`
+### `comment_epub(source, output=None, *, llm, config=None, progress_callback=None, chapter_filter=None) -> CommentorResult`
 
 The single entry point. Runs extract → process → inject on `source` and writes a new EPUB to `output` (default: `<stem>.commented.epub` next to the source).
 
@@ -151,8 +151,37 @@ The single entry point. Runs extract → process → inject on `source` and writ
 | `llm` | `LLMProtocol` | Any LLM satisfying the protocol (`LLM` in production, `MockLLM` in tests). |
 | `config` | `CommentConfig \| None` | Pipeline knobs. `None` → defaults. |
 | `progress_callback` | `Callable[[ProgressEvent], None] \| None` | Optional hook fired at stage boundaries and per chapter / per block. See [With progress tracking](#with-progress-tracking). |
+| `chapter_filter` | `ChapterFilter \| None` | Optional `Callable[[list[Chapter]], list[bool]]`. Invoked between extract and process; returns a parallel bool mask (`True` = keep, `False` = drop). See [Filtering chapters](#filtering-chapters). |
 
 Returns a `CommentorResult` with `output_path`, `annotations`, per-chapter counts, and the LLM's token totals (`total_tokens`, `input_tokens`, `input_cache_tokens`, `output_tokens`).
+
+#### Filtering chapters
+
+The library exposes a generic `ChapterFilter` callback so any caller (notebook, web UI, future GUI) can decide which chapters go through the LLM:
+
+```python
+from epub_commentor import Chapter, comment_epub
+
+def only_real_chapters(chapters: list[Chapter]) -> list[bool]:
+    """Skip the first spine entry (often a title page) and any empty chapter."""
+    return [
+        i > 0 and any(True for _ in ch.body.iter("p"))
+        for i, ch in enumerate(chapters)
+    ]
+
+result = comment_epub(
+    source="book.epub",
+    llm=llm,
+    config=config,
+    chapter_filter=only_real_chapters,
+)
+```
+
+Dropped chapters never reach the LLM stage — their bytes flow through the target ZIP unchanged (`Zip.__exit__` migrates them as-is from the source), so no restore step is needed. The callback receives a defensive copy of the spine-ordered chapter list.
+
+If the returned mask is not a `list[bool]` of matching length, `comment_epub` raises `ValueError` (a programmer error, not a recoverable `CommentorError`).
+
+The CLI ships a ready-made implementation: `-i` / `--interactive` opens a `questionary` checkbox so you can pick chapters at the terminal.
 
 ### `CommentConfig`
 
@@ -198,10 +227,22 @@ poetry run epub-commentor SOURCE [-o OUTPUT] [--format-json PATH] [--synopsis TE
                               [--cache-user-id ID]
                               [--target-language LANG]
                               [--css-path PATH] [--no-css]
-                              [--fail-on-empty-chapter] [-q]
+                              [--fail-on-empty-chapter] [-q] [-i]
 ```
 
 All flags map 1:1 onto `CommentConfig` fields (plus `--cache-path` / `--log-dir` / `--debug` for the LLM). Run `epub-commentor --help` for the full list.
+
+#### Interactive chapter selection (`-i` / `--interactive`)
+
+By default every chapter in the spine goes through the LLM pipeline. To choose interactively instead, pass `-i`:
+
+```bash
+poetry run epub-commentor path/to/source.epub --synopsis "..." -i
+```
+
+After the EPUB is parsed, a checkbox list of all chapters appears. Use `space` to toggle, `a` to select all, `i` to invert, `enter` to confirm. Chapters with zero `<p>` elements (cover pages, nav documents, image-only sections) are pre-deselected so a user can press `enter` to skip them all at once.
+
+When `-i` is set, the tqdm progress bars are automatically suppressed — questionary owns the terminal. The flag requires a TTY: piping the source through stdin exits with code `2`.
 
 ## Configuration
 
@@ -360,7 +401,7 @@ poetry run epub-commentor tests/assets/The\ little\ prince.epub \
 ## Testing
 
 ```bash
-# Unit + integration + e2e (~185 tests against real asset files)
+# Unit + integration + e2e (~197 tests against real asset files; 3 pre-existing failures unrelated to this feature)
 poetry run pytest tests/ -v
 
 # Just the commentary-specific tests

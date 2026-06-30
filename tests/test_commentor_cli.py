@@ -22,14 +22,17 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 import zipfile
 from pathlib import Path
+from unittest import mock
+from xml.etree.ElementTree import fromstring
 
 import pytest
 from _mock_llm import MockLLM, json_dumps
 
 from epub_commentor import CommentorResult, comment_epub
-from epub_commentor.cli import _build_config, _build_parser, _resolve_format_json_path
+from epub_commentor.cli import _build_chapter_filter, _build_config, _build_parser, _resolve_format_json_path
 from epub_commentor.config import CommentConfig
 from epub_commentor.epub.zip import Zip
 from epub_commentor.llm.schema import ChapterMemo, CommentItem, CommentKind, CommentPosition
@@ -139,6 +142,7 @@ class TestArgparseParser:
                 "--no-css",
                 "--fail-on-empty-chapter",
                 "--quiet",
+                "--interactive",
             ]
         )
         assert ns.source == Path("book.epub")
@@ -158,6 +162,7 @@ class TestArgparseParser:
         assert ns.no_css is True
         assert ns.fail_on_empty_chapter is True
         assert ns.quiet is True
+        assert ns.interactive is True
 
     def test_missing_source_errors(self, capsys: pytest.CaptureFixture[str]) -> None:
         parser = _build_parser()
@@ -419,3 +424,47 @@ def test_top_level_imports() -> None:
     # And re-exported in __all__ for star-import users.
     assert "comment_epub" in epub_commentor.__all__
     assert "CommentorResult" in epub_commentor.__all__
+
+
+# ---------------------------------------------------------------------------
+# _build_chapter_filter (interactive chapter-picker)
+# ---------------------------------------------------------------------------
+
+
+def _mk_chapter_stub(i: int) -> Chapter:
+    """Bare Chapter stub for testing the picker callback in isolation."""
+    body = fromstring(f"<html><body><p>p{i}</p></body></html>").find("body")
+    assert body is not None
+    return Chapter(path=Path(f"ch{i}.xhtml"), title=f"Chapter {i}", body=body, xml_node=None)
+
+
+class TestBuildChapterFilter:
+    def test_default_args_returns_none(self) -> None:
+        ns = argparse.Namespace(interactive=False)
+        assert _build_chapter_filter(ns) is None
+
+    def test_interactive_true_with_tty_returns_callable(self) -> None:
+        ns = argparse.Namespace(interactive=True)
+        with (
+            mock.patch.object(sys.stdin, "isatty", return_value=True),
+            mock.patch("questionary.checkbox") as mock_checkbox,
+        ):
+            mock_checkbox.return_value.ask.return_value = [0, 2]
+            cb = _build_chapter_filter(ns)
+            assert cb is not None and callable(cb)
+            chapters = [_mk_chapter_stub(i) for i in range(3)]
+            mask = cb(chapters)
+            assert mask == [True, False, True]
+            assert mock_checkbox.called
+
+    def test_interactive_true_without_tty_exits(self) -> None:
+        ns = argparse.Namespace(interactive=True)
+        with mock.patch.object(sys.stdin, "isatty", return_value=False):
+            with pytest.raises(SystemExit) as ei:
+                _build_chapter_filter(ns)
+            assert ei.value.code == 2
+
+    def test_short_flag_alias_also_sets_interactive(self) -> None:
+        parser = _build_parser()
+        ns = parser.parse_args(["book.epub", "-i"])
+        assert ns.interactive is True

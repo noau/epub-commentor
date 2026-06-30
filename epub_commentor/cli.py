@@ -22,10 +22,11 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from .commentor import CommentorResult, comment_epub
+from .commentor import ChapterFilter, CommentorResult, comment_epub
 from .config import CommentConfig
 from .errors import CommentorError
 from .llm import LLM
+from .pipeline.extract import Chapter
 from .progress import make_default_progress_callback
 
 
@@ -138,6 +139,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Suppress the per-stage progress summary printed at the end.",
     )
+    parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help=(
+            "After extracting chapters, prompt interactively to choose which "
+            "chapters to annotate. Uses a terminal checkbox "
+            "(space=toggle, a=all, i=invert, enter=confirm). Requires a TTY."
+        ),
+    )
     return parser
 
 
@@ -216,6 +227,64 @@ def _build_config(args: argparse.Namespace) -> CommentConfig:
     return cfg
 
 
+def _build_chapter_filter(args: argparse.Namespace) -> ChapterFilter | None:
+    """Build the chapter-filter callback for ``-i`` / ``--interactive``.
+
+    Returns ``None`` when the flag is absent — ``comment_epub`` treats that
+    as identity (no chapters filtered). Otherwise returns a callable that
+    presents a questionary checkbox on stdin and yields a parallel bool mask.
+
+    Raises
+    ------
+    SystemExit(2)
+        When the flag is set but stdin is not a TTY (CI, piped input,
+        redirected stdin). Silently falling back to "all chapters" would
+        surprise users who explicitly opted into the interactive flow.
+    """
+    if not getattr(args, "interactive", False):
+        return None
+
+    if not sys.stdin.isatty():
+        print(
+            "error: --interactive requires an interactive terminal (stdin is not a TTY).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    import questionary  # local import; library stays import-clean if -i is unused
+
+    def _filter(chapters: list[Chapter]) -> list[bool]:
+        # Pre-deselect empty chapters so a user can press `enter` to skip
+        # them all at once. The library's own _process_chapter still guards
+        # against them defensively in case a callback ever drops the pre-deselect.
+        n_paragraphs: dict[str, int] = {ch.path.as_posix(): sum(1 for _ in ch.body.iter("p")) for ch in chapters}
+        choices = [
+            questionary.Choice(
+                title=(
+                    f"{i + 1:2d}. {ch.title[:60]}"
+                    + ("" if n_paragraphs[ch.path.as_posix()] > 0 else "  (empty — no <p>)")
+                ),
+                value=i,
+                checked=(n_paragraphs[ch.path.as_posix()] > 0),
+            )
+            for i, ch in enumerate(chapters)
+        ]
+        answer = questionary.checkbox(
+            "Select chapters to annotate (space=toggle, a=all, i=invert, enter=confirm):",
+            choices=choices,
+        ).ask()
+        if answer is None:  # user pressed Ctrl-C
+            print("aborted by user.", file=sys.stderr)
+            sys.exit(130)
+
+        mask = [False] * len(chapters)
+        for value in answer:
+            mask[value] = True
+        return mask
+
+    return _filter
+
+
 def _print_summary(result: CommentorResult, source: Path) -> None:
     """Render a one-screen summary at the end of a successful run."""
     print("")
@@ -266,7 +335,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     config = _build_config(args)
 
-    progress_callback = make_default_progress_callback(quiet=args.quiet)
+    # When interactive mode is on the questionary checkbox owns the terminal,
+    # so we must suppress the tqdm bars — they would otherwise fight for stdout.
+    progress_quiet = args.quiet or bool(getattr(args, "interactive", False))
+    progress_callback = make_default_progress_callback(quiet=progress_quiet)
+
+    chapter_filter = _build_chapter_filter(args)
 
     try:
         result = comment_epub(
@@ -275,6 +349,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             llm=llm,
             config=config,
             progress_callback=progress_callback,
+            chapter_filter=chapter_filter,
         )
     except CommentorError as exc:
         print(f"commentor failed: {type(exc).__name__}: {exc}", file=sys.stderr)

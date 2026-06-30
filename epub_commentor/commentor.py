@@ -26,13 +26,13 @@ from pathlib import Path
 from .config import CommentConfig
 from .epub.zip import Zip
 from .llm.protocol import LLMProtocol
-from .pipeline import ChapterAnnotation, extract_chapters, inject_annotations, process_chapters
+from .pipeline import ChapterAnnotation, ChapterFilter, extract_chapters, inject_annotations, process_chapters
 from .progress import ProgressCallback, ProgressEvent
 
 _logger = logging.getLogger(__name__)
 
 # Re-exported for callers that prefer importing from ``epub_commentor``.
-__all__ = ["CommentorResult", "ProgressCallback", "comment_epub"]
+__all__ = ["ChapterFilter", "CommentorResult", "ProgressCallback", "comment_epub"]
 
 
 @dataclass
@@ -113,6 +113,7 @@ def comment_epub(
     llm: LLMProtocol,
     config: CommentConfig | None = None,
     progress_callback: ProgressCallback | None = None,
+    chapter_filter: ChapterFilter | None = None,
 ) -> CommentorResult:
     """Run the full extract → process → inject pipeline on ``source``.
 
@@ -137,6 +138,18 @@ def comment_epub(
         for CLI progress bars. Stages fired (in order):
         ``"extract"``, ``"process"`` (with ``substage="scan"`` /
         ``"annotate"`` events emitted by the pipeline), ``"inject"``.
+        When ``chapter_filter`` is supplied a synthetic
+        ``substage="select"`` event is emitted before and after the
+        callback returns so progress renderers can react to the
+        interactive phase if they choose to.
+    chapter_filter:
+        Optional :data:`~epub_commentor.pipeline.extract.ChapterFilter`
+        callback invoked between :func:`extract_chapters` and
+        :func:`process_chapters`. Receives the spine-ordered chapter
+        list and returns a parallel ``list[bool]`` mask — ``True`` keeps
+        the chapter, ``False`` drops it. Dropped chapters are never
+        passed to the LLM stage; their bytes flow through
+        :meth:`Zip.__exit__` as-is. ``None`` keeps every chapter.
 
     Returns
     -------
@@ -154,6 +167,33 @@ def comment_epub(
     with Zip(source_path, target_path) as z:
         chapters, book_metadata = extract_chapters(z)
         _emit_progress(progress_callback, ProgressEvent(stage="extract", current=1, total=1))
+
+        # Optional user-supplied chapter filter: returns a parallel bool mask
+        # where True[i] keeps chapter i and False[i] drops it from the run.
+        # Dropped chapters never reach process_chapters; their source bytes
+        # flow through Zip.__exit__ as-is, so no restore step is needed.
+        if chapter_filter is not None:
+            _emit_progress(
+                progress_callback,
+                ProgressEvent(stage="process", substage="select", current=0, total=len(chapters)),
+            )
+            mask = chapter_filter(list(chapters))
+            if not isinstance(mask, list) or len(mask) != len(chapters) or not all(isinstance(x, bool) for x in mask):
+                _logger.warning(
+                    "chapter_filter returned an invalid mask (got %s of length %s; expected list[bool] of length %d)",
+                    type(mask).__name__,
+                    len(mask) if isinstance(mask, list) else "<not a list>",
+                    len(chapters),
+                )
+                raise ValueError(
+                    f"chapter_filter must return a parallel list[bool] of length {len(chapters)}; "
+                    f"got {type(mask).__name__} of length {len(mask) if isinstance(mask, list) else 'n/a'}"
+                )
+            chapters = [ch for ch, keep in zip(chapters, mask) if keep]
+            _emit_progress(
+                progress_callback,
+                ProgressEvent(stage="process", substage="select", current=len(chapters), total=len(chapters)),
+            )
 
         total = max(len(chapters), 1)
         _emit_progress(progress_callback, ProgressEvent(stage="process", current=0, total=total, substage="scan"))

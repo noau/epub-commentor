@@ -21,6 +21,7 @@ from .llm import LLM, Message, MessageRole
 from .pipeline import (
     Chapter,
     ChapterAnnotation,
+    ChapterFilter,
     inject_annotations,
 )
 from .progress import ProgressCallback, ProgressEvent, make_default_progress_callback
@@ -28,6 +29,7 @@ from .progress import ProgressCallback, ProgressEvent, make_default_progress_cal
 __all__ = [
     "Chapter",
     "ChapterAnnotation",
+    "ChapterFilter",
     "CommentConfig",
     "CommentInvalidJSONError",
     "CommentNoParagraphsError",

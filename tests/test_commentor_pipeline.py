@@ -13,12 +13,14 @@ Covers:
 from __future__ import annotations
 
 import io
+import shutil
 from pathlib import Path
 from xml.etree.ElementTree import fromstring
 
 import pytest
 from _mock_llm import MockLLM, json_dumps
 
+from epub_commentor import comment_epub
 from epub_commentor.config import CommentConfig
 from epub_commentor.errors import CommentInvalidJSONError
 from epub_commentor.pipeline.extract import Chapter
@@ -222,3 +224,133 @@ class TestProgressEvents:
         )
         anns = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
         assert len(anns) == 1
+
+
+class TestChapterFilter:
+    """``comment_epub`` honours a ``chapter_filter`` callback."""
+
+    _ASSET = Path("tests/assets/The little prince.epub")
+
+    def _copy_asset(self, tmp_path: Path) -> tuple[Path, Path]:
+        if not self._ASSET.exists():
+            pytest.skip(f"asset not found: {self._ASSET}")
+        src = tmp_path / "src.epub"
+        out = tmp_path / "annotated.epub"
+        shutil.copy(self._ASSET, src)
+        return src, out
+
+    @staticmethod
+    def _annotate_response() -> str:
+        return json_dumps({"comments": [{"target_p_ids": [0], "position": "before", "kind": "intro", "content": "x"}]})
+
+    def test_mask_keeps_subset(self, tmp_path: Path) -> None:
+        """A bool mask of length N yields ``sum(mask)`` annotations."""
+        src, out = self._copy_asset(tmp_path)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": self._annotate_response(),
+            }
+        )
+
+        # Discover the actual chapter count so we can build a valid mask.
+        from epub_commentor.epub.zip import Zip
+        from epub_commentor.pipeline.extract import extract_chapters
+
+        with Zip(src, out) as z:
+            chapters, _ = extract_chapters(z)
+        n = len(chapters)
+        assert n >= 3, f"test asset needs >=3 chapters, got {n}"
+
+        keep_first_last = [True] + [False] * (n - 2) + [True] if n >= 2 else [True] * n
+
+        def _filter(_chapters: list[Chapter]) -> list[bool]:
+            return keep_first_last
+
+        result = comment_epub(
+            src,
+            out,
+            llm=llm,
+            config=CommentConfig(block_size=20),
+            chapter_filter=_filter,
+        )
+        assert len(result.annotations) == sum(keep_first_last)
+
+    def test_mask_all_false_runs_without_raising(self, tmp_path: Path) -> None:
+        """Dropping every chapter returns an empty ``CommentorResult`` cleanly."""
+        src, out = self._copy_asset(tmp_path)
+        llm = MockLLM(responses_by_seed={"scan__response": _memo_json()})
+
+        result = comment_epub(
+            src,
+            out,
+            llm=llm,
+            config=CommentConfig(block_size=20),
+            chapter_filter=lambda cs: [False] * len(cs),
+        )
+        assert result.chapters_processed == 0
+        assert result.chapters_skipped == 0
+        assert result.annotations == []
+        assert result.total_comments == 0
+
+    def test_mask_length_mismatch_raises(self, tmp_path: Path) -> None:
+        """Wrong-length mask is a programmer error: ``ValueError``."""
+        src, out = self._copy_asset(tmp_path)
+        llm = MockLLM(responses_by_seed={"scan__response": _memo_json()})
+
+        with pytest.raises(ValueError, match=r"parallel list\[bool\]"):
+            comment_epub(
+                src,
+                out,
+                llm=llm,
+                config=CommentConfig(block_size=20),
+                chapter_filter=lambda cs: [True, False],
+            )
+
+    def test_mask_non_bool_elements_raise(self, tmp_path: Path) -> None:
+        """Non-bool elements are rejected just like wrong length."""
+        src, out = self._copy_asset(tmp_path)
+        llm = MockLLM(responses_by_seed={"scan__response": _memo_json()})
+
+        def _bad(_cs: list[Chapter]) -> list[int]:
+            return [1, 0, 1]
+
+        with pytest.raises(ValueError, match=r"parallel list\[bool\]"):
+            comment_epub(
+                src,
+                out,
+                llm=llm,
+                config=CommentConfig(block_size=20),
+                chapter_filter=_bad,
+            )
+
+    def test_callback_receives_spine_ordered_list(self, tmp_path: Path) -> None:
+        """The callback sees chapters in spine order — same as ``extract_chapters``."""
+        src, out = self._copy_asset(tmp_path)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": self._annotate_response(),
+            }
+        )
+
+        from epub_commentor.epub.zip import Zip
+        from epub_commentor.pipeline.extract import extract_chapters
+
+        with Zip(src, out) as z:
+            original, _ = extract_chapters(z)
+
+        seen: list[str] = []
+
+        def _record(cs: list[Chapter]) -> list[bool]:
+            seen.extend(c.path.as_posix() for c in cs)
+            return [True] * len(cs)
+
+        comment_epub(
+            src,
+            out,
+            llm=llm,
+            config=CommentConfig(block_size=20),
+            chapter_filter=_record,
+        )
+        assert seen == [c.path.as_posix() for c in original]

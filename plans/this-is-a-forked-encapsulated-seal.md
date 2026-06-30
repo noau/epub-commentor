@@ -259,21 +259,27 @@ class AnnotationFailedEvent:
 
 def comment_epub(
     source_path: PathLike | str,
-    target_path: PathLike | str,
+    target_path: PathLike | str | None = None,
     llm: LLM,
     config: CommentConfig | None = None,
     on_progress: Callable[[float], None] | None = None,
     on_annotation_failed: Callable[[AnnotationFailedEvent], None] | None = None,
-) -> None:
+    chapter_filter: Callable[[list[Chapter]], list[bool]] | None = None,  # M8
+) -> CommentorResult:
     """
     给 EPUB 注入 AI 评注。
-    
+
     - source_path: 源 EPUB
-    - target_path: 输出 EPUB
+    - target_path: 输出 EPUB（None 时落到 ``<stem>.commented.epub``）
     - llm: OpenAI 兼容 LLM 客户端（复用 epub_commentor.llm.LLM）
     - config: 评注配置
     - on_progress: 进度回调 [0, 1]
     - on_annotation_failed: 单批失败回调（默认 silently skip 该 block）
+    - chapter_filter: M8 新增。可选回调，接收 spine 顺序的 chapter 列表，
+      返回等长的 ``list[bool]`` —— ``True`` 保留进 LLM 流水线、``False`` 跳过。
+      跳过的章节原封不动经 ``Zip.__exit__`` 流回 EPUB（无需"恢复"逻辑）。
+      默认 ``None`` = 不过滤。CLI 在 ``-i`` / ``--interactive`` 下用 questionary
+      checkbox 实现。校验失败（长度不匹配 / 非 bool 元素）抛 ``ValueError``。
     """
 ```
 
@@ -677,6 +683,9 @@ def main():
     parser.add_argument("--user-id", type=str, default="default")
     parser.add_argument("--no-css", action="store_true")
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("-i", "--interactive", action="store_true",
+                        help="M8: 解析完成后弹 questionary checkbox 让用户勾选要评注的章节"
+                             "（空章节默认不勾选；非 TTY 直接 exit 2）")
     args = parser.parse_args()
     
     if args.synopsis and args.synopsis.startswith("@"):
@@ -768,6 +777,7 @@ epub-commentor = "epub_commentor.cli:main"
 | **M5 测试** | `tests/_mock_llm.py` + 7 个单元测试 + 10 个 challenge case | 2-3 天 |
 | **M6 CLI** | `scripts/comment_epub.py` + entrypoint + `format.template.json` 评注版 | 0.5-1 天 |
 | **M7 真实 LLM 联调** | 用 OpenAI 跑《The little prince》全本，验证样式、缓存、token 用量、Kindle 兼容性 | 1-2 天 |
+| **M8 交互式章节选择** | `ChapterFilter = Callable[[list[Chapter]], list[bool]]` 类型别名 + `comment_epub(chapter_filter=...)` 可选 kwarg + `-i/--interactive` CLI 旗标（questionary checkbox 弹窗，空章节默认不勾选；非 TTY 直接 exit 2；tqdm 在 `-i` 下自动静默让出终端） + `tests/test_commentor_pipeline.py::TestChapterFilter`（5 个用例）+ `tests/test_commentor_cli.py::TestBuildChapterFilter`（4 个用例） | 0.5-1 天 |
 
 **总计：8-13 天**
 

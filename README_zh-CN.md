@@ -140,7 +140,7 @@ comment_epub(source="book.epub", llm=llm, config=config, progress_callback=log_p
 
 ## API 参考
 
-### `comment_epub(source, output=None, *, llm, config=None, progress_callback=None) -> CommentorResult`
+### `comment_epub(source, output=None, *, llm, config=None, progress_callback=None, chapter_filter=None) -> CommentorResult`
 
 唯一的顶层入口。在 `source` 上跑 extract → process → inject，把新 EPUB 写到 `output`（默认：源文件同目录的 `<stem>.commented.epub`）。
 
@@ -151,8 +151,37 @@ comment_epub(source="book.epub", llm=llm, config=config, progress_callback=log_p
 | `llm` | `LLMProtocol` | 满足 protocol 的任何 LLM（生产用 `LLM`，测试用 `MockLLM`）。 |
 | `config` | `CommentConfig \| None` | 流水线配置。`None` → 走默认值。 |
 | `progress_callback` | `Callable[[ProgressEvent], None] \| None` | 可选钩子，阶段起止 + 每个 chapter / 每个 block 完成时触发。详见 [带进度条](#带进度条)。 |
+| `chapter_filter` | `ChapterFilter \| None` | 可选 `Callable[[list[Chapter]], list[bool]]`，在 extract 与 process 之间调用，返回与 spine 等长的 bool 遮罩（`True` 保留、`False` 跳过）。详见 [章节过滤](#章节过滤)。 |
 
 返回 `CommentorResult`，含 `output_path`、`annotations`、处理 / 跳过的章节计数以及 LLM 的 token 用量（`total_tokens` / `input_tokens` / `input_cache_tokens` / `output_tokens`）。
+
+#### 章节过滤
+
+库层面提供一个通用 `ChapterFilter` 回调，让任何调用方（notebook、Web UI、未来的 GUI）都能决定哪些章节走 LLM：
+
+```python
+from epub_commentor import Chapter, comment_epub
+
+def only_real_chapters(chapters: list[Chapter]) -> list[bool]:
+    """跳过第一个 spine 项（通常是封面）以及任何空章节。"""
+    return [
+        i > 0 and any(True for _ in ch.body.iter("p"))
+        for i, ch in enumerate(chapters)
+    ]
+
+result = comment_epub(
+    source="book.epub",
+    llm=llm,
+    config=config,
+    chapter_filter=only_real_chapters,
+)
+```
+
+被过滤的章节不会进入 LLM 阶段——它们的字节通过 `Zip.__exit__` 从源 ZIP 原样流到目标 ZIP，无需"恢复"逻辑。回调收到的是 spine 顺序章节列表的防御性副本。
+
+若返回的 mask 不是等长的 `list[bool]`，`comment_epub` 会抛 `ValueError`（属程序员错误，而非可恢复的 `CommentorError`）。
+
+CLI 自带一个开箱即用的实现：`-i` / `--interactive` 弹 `questionary` checkbox 让用户在终端勾选章节。
 
 ### `CommentConfig`
 
@@ -198,10 +227,22 @@ poetry run epub-commentor SOURCE [-o OUTPUT] [--format-json PATH] [--synopsis TE
                               [--cache-user-id ID]
                               [--target-language LANG]
                               [--css-path PATH] [--no-css]
-                              [--fail-on-empty-chapter] [-q]
+                              [--fail-on-empty-chapter] [-q] [-i]
 ```
 
 所有旗标一一映射到 `CommentConfig` 字段（外加 `--cache-path` / `--log-dir` / `--debug` 给 LLM 用）。`epub-commentor --help` 可见完整列表。
+
+#### 交互式选章节（`-i` / `--interactive`）
+
+默认情况下 spine 上的每一章都会走 LLM 流水线。如果想交互式地挑选章节，加 `-i`：
+
+```bash
+poetry run epub-commentor path/to/source.epub --synopsis "..." -i
+```
+
+EPUB 解析完毕后，会弹出 checkbox 列出所有章节：空格切换、`a` 全选、`i` 反选、回车确认。零 `<p>` 元素（封面、导航文档、纯图页）的章节默认不勾选——直接按回车就能一键跳过它们。
+
+`-i` 会自动抑制 tqdm 进度条（终端让给 questionary）。该旗标要求 stdin 是 TTY：通过管道输入时会以退出码 `2` 失败。
 
 ## 配置说明
 
@@ -360,7 +401,7 @@ poetry run epub-commentor tests/assets/The\ little\ prince.epub \
 ## 测试
 
 ```bash
-# 全部单元 / 集成 / 端到端（约 185 用例，包含真实 EPUB 资产）
+# 全部单元 / 集成 / 端到端（约 197 用例，包含真实 EPUB 资产；3 个 pre-existing 失败与本功能无关）
 poetry run pytest tests/ -v
 
 # 仅评注相关测试

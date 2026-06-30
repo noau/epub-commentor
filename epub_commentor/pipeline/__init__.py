@@ -11,7 +11,7 @@ The package has three layers, each owning one stage of the work:
   ``commentary.css`` stylesheet.
 """
 
-from .extract import Chapter, extract_chapters
+from .extract import Chapter, ChapterFilter, extract_chapters
 from .inject import (
     inject_annotations,
     inject_chapter,
@@ -25,6 +25,7 @@ from .process import ChapterAnnotation, process_chapters
 __all__ = [
     "Chapter",
     "ChapterAnnotation",
+    "ChapterFilter",
     "extract_chapters",
     "inject_annotations",
     "inject_chapter",
