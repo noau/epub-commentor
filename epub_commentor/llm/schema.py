@@ -29,12 +29,12 @@ class KeyTerm(BaseModel):
 class ChapterMemo(BaseModel):
     """Stage 1 output: a compact summary used to guide Stage 2."""
 
-    core_thesis: str = Field(..., min_length=1, max_length=2000)
-    outline: list[str] = Field(..., min_length=3, max_length=7)
-    key_terms: list[KeyTerm] = Field(default_factory=list, max_length=15)
-    tone: str = Field(..., min_length=1, max_length=200)
-    target_audience: str = Field(..., min_length=1, max_length=500)
-    reading_anchors: list[str] = Field(default_factory=list, max_length=3)
+    core_thesis: str = Field(...)
+    outline: list[str] = Field(...)
+    key_terms: list[KeyTerm] = Field(default_factory=list)
+    tone: str = Field(...)
+    target_audience: str = Field(...)
+    reading_anchors: list[str] = Field(default_factory=list)
 
 
 class CommentPosition(str, Enum):

@@ -39,7 +39,7 @@ class CommentConfig:
     book_synopsis: str | None = None
     inject_css: bool = True
     css_path_in_epub: Path = field(default_factory=lambda: Path("Styles/commentary.css"))
-    target_language: str = "English"
+    target_language: str = "Chinese"
     fail_on_empty_chapter: bool = False
 
 
