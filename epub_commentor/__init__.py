@@ -2,10 +2,12 @@
 
 This package re-exports the LLM client, configuration dataclass, the
 top-level pipeline entry points, and the :class:`CommentorError` exception
-hierarchy. Higher-level orchestration (e.g. ``comment_epub``) will be
-added in M6 once the CLI is wired in.
+hierarchy. The single high-level orchestration entry point
+:func:`comment_epub` is also re-exported so callers (``scripts/comment_epub.py``,
+third-party tools) can import everything from the top level.
 """
 
+from .commentor import CommentorResult, comment_epub
 from .config import CommentConfig
 from .errors import (
     CommentInvalidJSONError,
@@ -32,8 +34,10 @@ __all__ = [
     "CommentOrphanPIdError",
     "CommentScanFailedError",
     "CommentorError",
+    "CommentorResult",
     "LLM",
     "Message",
     "MessageRole",
+    "comment_epub",
     "inject_annotations",
 ]
