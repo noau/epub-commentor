@@ -96,6 +96,12 @@ def _process_chapter(
         }
         for future in as_completed(futures):
             block_comments = future.result()
+            # Translate block-local p_ids to absolute paragraph indices so
+            # downstream injection can map them via body.iter("p") directly.
+            # Validation in annotate_block already passed on block-local values.
+            block_start = futures[future]
+            for c in block_comments:
+                c.target_p_ids = [pid + block_start for pid in c.target_p_ids]
             comments.extend(block_comments)
 
     # Sort by first target_p_id then by position so inject.py can walk in order.

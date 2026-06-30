@@ -1,0 +1,56 @@
+/* commentary.css — EPUB commentary asides (e-ink friendly)
+ *
+ * Designed for 6-inch e-ink screens (Kindle, Kobo, Boox):
+ *   - pure grayscale; no background color (avoids night-mode invert)
+ *   - border + line-height to provide visual separation, no box-shadow
+ *   - page-break-inside: avoid keeps the aside glued to its anchor paragraph
+ *   - overflow-wrap survives long URLs in NOTE entries
+ *   - reset <p> margin/indent so asides don't inherit body typography
+ */
+
+.commentary {
+  margin: 1em 0.5em 1.2em 1.5em;
+  padding: 0.6em 0.8em;
+  border-left: 3px solid #555;
+  border-top: 1px solid #ddd;
+  border-bottom: 1px solid #ddd;
+  border-right: 1px solid #ddd;
+  font-size: 0.95em;
+  line-height: 1.6;
+  font-style: normal;
+  break-inside: avoid;
+  page-break-inside: avoid;
+  overflow-wrap: break-word;
+}
+
+.commentary p {
+  margin: 0 0 0.5em 0;
+  padding: 0;
+  text-indent: 0;
+}
+
+.commentary p:last-child {
+  margin-bottom: 0;
+}
+
+/* INTRO — prelude to a section, light dashed left rule */
+.commentary-intro {
+  border-left-style: dashed;
+  border-left-color: #000;
+}
+
+/* SUMMARY — recap of a section, solid bold-ish left rule */
+.commentary-summary {
+  border-left-width: 4px;
+  border-left-color: #000;
+  border-top-color: #888;
+  border-bottom-color: #888;
+}
+
+/* NOTE — marginalia, double left rule, italic, deeper indent */
+.commentary-note {
+  border-left-style: double;
+  border-left-color: #333;
+  font-style: italic;
+  margin-left: 2em;
+}
