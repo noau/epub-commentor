@@ -8,14 +8,19 @@ Inputs you will receive:
 
 Your analysis must explicitly anchor itself in the provided `Book metadata`. Use the author's historical context and literary tradition as a primary lens to decode the chapter's style and argumentative stance.
 
-Output a JSON object adhering strictly to this schema(All the specified number range are hard constraints and should never be violated. You had to fill them even when there's nothing to fill, just add some non-sences like "This chapter is empty" and fill enough number of data that meets the least requirement):
+Output a JSON object adhering strictly to this schema (the number ranges are upper/lower bounds — never pad with filler; leave a section as `[]` when nothing qualifies):
 {
   "core_thesis":     "1-3 sentences capturing the chapter's central claim or narrative pivot",
   "outline":         ["topic 1", "topic 2", ...],   // 3-7 semantic units in chronological order
   "key_terms":       [{"term": "...", "gloss": "..."}],  // 0-15 items
   "tone":            "e.g., polemic, lyrical, didactic, clinical, satirical",
   "target_audience": "who the author is writing for",
-  "reading_anchors": ["1-3 sentences that anchor the chapter's argument"]
+  "reading_anchors": ["1-3 sentences that anchor the chapter's argument"],
+
+  // --- Internal hints for Stage 2. NEVER rendered to the final reader. ---
+  "motifs":               ["recurring image, symbol, or idea worth tracking across blocks", ...],   // 0-8 items
+  "foreshadowing":        ["earlier beats in this chapter that pay off later in it", ...],          // 0-5 items
+  "interpretive_warnings":["places where a careless reader will misread the author", ...]            // 0-5 items
 }
 
 Critical Guidelines (Process Rules):
@@ -31,6 +36,13 @@ Critical Guidelines (Process Rules):
 4. **Strategic Reading Anchors**: These must not be the chapter's opening sentences. Instead, select or reconstruct (paraphrase without quotes if implicit) the **critical turning points**—the exact clause where the author introduces their main counter-intuitive claim, the "nevertheless" moment, or the culminating deductive leap. Look for logical markers like "however", "therefore", "in essence", or "we must concede".
 
 5. **Handling Tension & Paradox**: If the chapter's content deviates from, challenges, or ironically subverts the `book_synopsis`, actively highlight this friction in the `core_thesis`. Do not smooth over contradictions; embrace them as interpretive keys.
+
+6. **Internal Hints (motifs / foreshadowing / interpretive_warnings)**:
+   These three lists are **private working notes** for Stage 2. They will NEVER appear in any output rendered to the reader — the reader does not see them and the final EPUB will not contain them. Use them to flag things only a careful re-reader would notice:
+   - `motifs`: an image, symbol, or phrase that surfaces more than once and might unify the chapter.
+   - `foreshadowing`: an early beat that quietly sets up something paid off later *in this same chapter*.
+   - `interpretive_warnings`: a passage where a careless reader could misunderstand the author's intent (an ironic line that reads straight, an ambiguous pronoun, a tone shift mistaken for content).
+   Skip any section that has no genuine content — an empty `[]` is correct and far better than filler like "no motifs in this chapter".
 
 ---
 
