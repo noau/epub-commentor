@@ -31,6 +31,12 @@ class LLM:
         cache_path: PathLike | str | None = None,
         log_dir_path: PathLike | str | None = None,
         extra_body: dict[str, object] | None = None,
+        # `debug` is accepted (no-op) for backward compatibility with
+        # `format.json` / `format.template.json` that declare this field.
+        # Actual per-request debug logging is controlled by `log_dir_path`
+        # — when set, `LLMContext` writes `[[Parameters]] / [[Request]] /
+        # [[Response]] / [[Error]] / [[StageError]]` segments to disk.
+        debug: bool = False,
     ) -> None:
         prompts_path = Path(str(files("epub_commentor"))) / "data"
         self._templates: dict[str, Template] = {}
@@ -40,6 +46,7 @@ class LLM:
         self._temperature: Increasable = Increasable(temperature)
         self._cache_path: Path | None = self._ensure_dir_path(cache_path)
         self._log_dir_path: Path | None = self._ensure_dir_path(log_dir_path)
+        self._debug: bool = debug
         self._statistics = Statistics()
         self._executor = LLMExecutor(
             url=url,

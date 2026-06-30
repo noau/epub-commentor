@@ -324,8 +324,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.debug and log_dir is None:
         log_dir = Path("temp/logs")
     if log_dir is not None:
+        # Note: `--debug` is purely a CLI shorthand for `log_dir_path`;
+        # the actual per-request debug logging is gated by `log_dir_path`
+        # inside `LLM`. We deliberately do NOT inject a `debug` key into
+        # `cfg_overrides` — `LLM.__init__` accepts the field from
+        # `format.json` as a no-op for backward compatibility, but here we
+        # trust the on-disk value rather than overwrite it from the CLI.
         cfg_overrides["log_dir_path"] = str(log_dir.resolve())
-        cfg_overrides["debug"] = True
     if cfg_overrides:
         # LLM doesn't accept post-construction rewrites of these paths;
         # we'd need to rebuild it. For simplicity we re-instantiate.
