@@ -77,6 +77,7 @@ def _split_blocks(chapter: Chapter, block_size: int) -> list[tuple[int, list]]:
 
 
 def _process_chapter(
+    index: str,
     chapter: Chapter,
     book_metadata: dict[str, str],
     llm: LLMProtocol,
@@ -100,6 +101,7 @@ def _process_chapter(
         return ChapterAnnotation(chapter=chapter, memo=_empty_memo(), comments=[])
 
     prompt_metadata = {k: v for k, v in book_metadata.items() if k not in _RESERVED_METADATA_KEYS}
+    print(f"{index}\tExtracting ChapterMemo for Chapter: {chapter.title}")
     memo = scan_chapter(
         body=chapter.body,
         chapter_path=chapter.path,
@@ -109,8 +111,13 @@ def _process_chapter(
         config=config,
     )
 
+    print(f"{index}\tSplitting Chapter: {chapter.title}")
     blocks = _split_blocks(chapter, config.block_size)
     chapter_hash = _chapter_hash(chapter.path)
+
+    block_count = len(blocks)
+    processed_block = 0
+    print(f"{index}\tSplitted Chapter {chapter.title} into {block_count} blcoks")
 
     comments: list[CommentItem] = []
     if not blocks:
@@ -131,6 +138,11 @@ def _process_chapter(
         }
         for future in as_completed(futures):
             block_comments = future.result()
+
+            processed_block += 1
+            print(f"{index}\tCommented blocks: {processed_block}/{block_count}")
+            print(block_comments)
+
             # Translate block-local p_ids to absolute paragraph indices so
             # downstream injection can map them via body.iter("p") directly.
             # Validation in annotate_block already passed on block-local values.
@@ -156,10 +168,18 @@ def process_chapters(
     Stage 1/Stage 2 inter-chapter races. Within a chapter, blocks run
     concurrently via :class:`ThreadPoolExecutor`.
     """
+    chapter_count = len(chapters)
+    processing = 0
+
     annotations: list[ChapterAnnotation] = []
     for chapter in chapters:
+        processing += 1
+        index = f"({processing}/{chapter_count})"
+        print(f"{index}\tProcessing Chapter: {chapter.title}")
+
         annotations.append(
             _process_chapter(
+                index=index,
                 chapter=chapter,
                 book_metadata=book_metadata,
                 llm=llm,
