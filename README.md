@@ -99,18 +99,43 @@ print(f"total tokens:       {result.total_tokens}")
 
 ### With progress tracking
 
+The CLI installs a two-row `tqdm` bar by default — outer chapter progress, inner per-block progress within the current chapter. `extract` and `inject` print single status lines via `tqdm.write()`.
+
+For programmatic use, install the same renderer explicitly or roll your own:
+
 ```python
-from tqdm import tqdm
+from epub_commentor import (
+    LLM,
+    comment_epub,
+    CommentConfig,
+    ProgressEvent,
+    make_default_progress_callback,
+)
 
-with tqdm(total=100, desc="Commenting", unit="%") as pbar:
-    last = {"v": 0.0}
-    def on_progress(stage: str, current: int, total: int) -> None:
-        # Stages fire in order: "extract" → "process" → "inject"
-        ratio = {"extract": 0.1, "process": 0.85, "inject": 1.0}[stage] * 100
-        pbar.update(ratio - last["v"])
-        last["v"] = ratio
+llm = LLM(...)
+config = CommentConfig(...)
 
-    comment_epub(source="book.epub", llm=llm, config=config, progress_callback=on_progress)
+# Default renderer: two tqdm bars on stderr (use quiet=True to suppress).
+progress = make_default_progress_callback(quiet=False)
+result = comment_epub(source="book.epub", llm=llm, config=config, progress_callback=progress)
+```
+
+`ProgressEvent` carries everything the renderer needs:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `stage` | `str` | `"extract"` / `"process"` / `"inject"`. |
+| `substage` | `str \| None` | Only set for `process`: `"scan"` (chapter) or `"annotate"` (block). |
+| `current` / `total` | `int` | Progress within the current stage. |
+| `message` | `str \| None` | Free-form description (e.g. chapter title). |
+
+```python
+# Custom renderer example: log every event instead of using tqdm.
+def log_progress(event: ProgressEvent) -> None:
+    label = event.substage or event.stage
+    print(f"[{label}] {event.current}/{event.total}  {event.message or ''}")
+
+comment_epub(source="book.epub", llm=llm, config=config, progress_callback=log_progress)
 ```
 
 ## API Reference
@@ -125,7 +150,7 @@ The single entry point. Runs extract → process → inject on `source` and writ
 | `output` | `Path \| str \| None` | Target path. `None` → `<stem>.commented.epub` next to the source. |
 | `llm` | `LLMProtocol` | Any LLM satisfying the protocol (`LLM` in production, `MockLLM` in tests). |
 | `config` | `CommentConfig \| None` | Pipeline knobs. `None` → defaults. |
-| `progress_callback` | `(stage, current, total) -> None \| None` | Optional hook. Stages: `extract`, `process`, `inject`. |
+| `progress_callback` | `Callable[[ProgressEvent], None] \| None` | Optional hook fired at stage boundaries and per chapter / per block. See [With progress tracking](#with-progress-tracking). |
 
 Returns a `CommentorResult` with `output_path`, `annotations`, per-chapter counts, and the LLM's token totals (`total_tokens`, `input_tokens`, `input_cache_tokens`, `output_tokens`).
 
@@ -169,13 +194,14 @@ The `epub-commentor` console script (registered in `pyproject.toml`) accepts:
 poetry run epub-commentor SOURCE [-o OUTPUT] [--format-json PATH] [--synopsis TEXT]
                               [--block-size N] [--concurrency N]
                               [--max-json-retries N] [--max-scan-retries N]
-                              [--cache-path DIR] [--cache-user-id ID]
+                              [--cache-path DIR] [--log-dir DIR] [--debug]
+                              [--cache-user-id ID]
                               [--target-language LANG]
                               [--css-path PATH] [--no-css]
                               [--fail-on-empty-chapter] [-q]
 ```
 
-All flags map 1:1 onto `CommentConfig` fields (plus `--cache-path` for the LLM). Run `epub-commentor --help` for the full list.
+All flags map 1:1 onto `CommentConfig` fields (plus `--cache-path` / `--log-dir` / `--debug` for the LLM). Run `epub-commentor --help` for the full list.
 
 ## Configuration
 
@@ -293,10 +319,48 @@ except CommentorError as exc:
 - **Intra-chapter**: parallel via `ThreadPoolExecutor(max_workers=concurrency)`. Stage 2 blocks within one chapter are independent.
 - **Cache**: `LLMContext` commits cache writes under a global lock so multi-threaded runs don't race.
 
+## Debug logging
+
+Long books benefit from a paper trail when something goes wrong on chapter 17 of 28. Pass `--log-dir PATH` to the CLI (or set `log_dir_path` in `format.json`) and Commentor drops one `request YYYY-MM-DD HH-MM-SS.log` file per LLM context. Each file mixes structured sections so you can grep for what you need:
+
+```bash
+# Turn on debug logging and write to ./temp/logs.
+poetry run epub-commentor tests/assets/The\ little\ prince.epub \
+    --synopsis "..." --log-dir ./temp/logs --debug
+```
+
+```
+08:29:12    [[Parameters]]:
+              temperature=0.4
+              top_p=0.9
+              max_tokens=None
+              cache_key=901e9296231d
+08:29:12    [[Request]]:
+              System: ...
+              User: ...
+08:29:12    [[CacheCheck]] cache_key=901e9296231d; hit=false
+08:29:14    [[Response]]:
+              {"comments": [...]}
+08:29:15    [[StageError]] stage=annotate; attempt=1/3; error=ValidationError: ...
+              Raw excerpt: {"comments": [{"target_p_ids": ...
+08:29:18    [[FinalError]] stage=annotate; attempts_exhausted=true; exception=...
+```
+
+| Section | Written by | What it tells you |
+|---|---|---|
+| `[[Parameters]]` | `LLMExecutor` | temperature / top_p / max_tokens / cache_key for the request. |
+| `[[Request]]` | `LLMExecutor` | Full system + user messages (and any assistant retries). |
+| `[[Response]]` | `LLMExecutor` | The raw model output for that attempt. |
+| `[[CacheCheck]] cache_key=<prefix>; hit=<bool>` | `LLMContext` | Cache short-circuit outcome. Pair with the matching `cache_key` in `[[Parameters]]`. |
+| `[[StageError]] stage=<scan\|annotate>; attempt=N/M; error=...; Raw excerpt: <truncated>` | `memo.py` / `block.py` | JSON validation failed; the raw body is captured so you can see exactly what the model returned. |
+| `[[FinalError]] stage=...; attempts_exhausted=true; exception=...` | `block.py` | All retries exhausted — last error before `CommentInvalidJSONError` is raised. |
+
+> `scripts/check_duplicate_ids.py` still works against this directory — it scans for `<aside id=` patterns, which the new sections never contain.
+
 ## Testing
 
 ```bash
-# Unit + integration + e2e (~173 tests against real asset files)
+# Unit + integration + e2e (~185 tests against real asset files)
 poetry run pytest tests/ -v
 
 # Just the commentary-specific tests
@@ -306,7 +370,7 @@ poetry run pytest tests/test_commentor_*.py -v
 poetry run python scripts/comment_challenge.py
 ```
 
-`tests/_mock_llm.py` provides a `MockLLM` that routes canned JSON responses by cache-seed prefix (`:scan:` vs `:annotate:`), so the entire pipeline can be exercised without an OpenAI key.
+`tests/_mock_llm.py` provides a `MockLLM` that routes canned JSON responses by cache-seed prefix (`:scan:` vs `:annotate:`). When constructed with `MockLLM(log_dir_path=...)`, the mock writes the same `[[Section]]` files as production `LLM`, so `tests/test_commentor_log.py` can assert on log content without an OpenAI key.
 
 ## Related Projects
 

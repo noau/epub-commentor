@@ -23,6 +23,7 @@ from epub_commentor.config import CommentConfig
 from epub_commentor.errors import CommentInvalidJSONError
 from epub_commentor.pipeline.extract import Chapter
 from epub_commentor.pipeline.process import ChapterAnnotation, process_chapters
+from epub_commentor.progress import ProgressEvent
 from epub_commentor.xml.xml_like import XMLLikeNode
 
 
@@ -127,3 +128,97 @@ class TestProcessChapters:
         assert len(anns) == 1
         assert anns[0].comments == []
         assert anns[0].memo.core_thesis.startswith("(chapter skipped")
+
+
+class TestProgressEvents:
+    def test_chapter_scan_event_emitted(self) -> None:
+        chapter = _mk_chapter(3)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps(
+                    {"comments": [{"target_p_ids": [0], "position": "before", "kind": "note", "content": "c"}]}
+                ),
+            }
+        )
+
+        events: list[ProgressEvent] = []
+        process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(),
+            progress_callback=events.append,
+        )
+
+        scan_events = [e for e in events if e.stage == "process" and e.substage == "scan"]
+        assert len(scan_events) == 1
+        assert scan_events[0].current == 1
+        assert scan_events[0].total == 1
+        assert scan_events[0].message == "ch.xhtml"
+
+    def test_block_annotate_events_emitted(self) -> None:
+        # 8 paragraphs at block_size=4 → 2 blocks → 2 annotate events
+        chapter = _mk_chapter(8)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps(
+                    {"comments": [{"target_p_ids": [0], "position": "before", "kind": "note", "content": "c"}]}
+                ),
+            }
+        )
+
+        events: list[ProgressEvent] = []
+        process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(block_size=4),
+            progress_callback=events.append,
+        )
+
+        annotate_events = [e for e in events if e.stage == "process" and e.substage == "annotate"]
+        # 1 zero-of-N event after splitting + 1 per block completion
+        assert len(annotate_events) == 3
+        assert annotate_events[0].current == 0
+        assert annotate_events[0].total == 2
+        assert annotate_events[-1].current == 2
+        assert annotate_events[-1].total == 2
+
+    def test_callback_exception_does_not_crash(self) -> None:
+        chapter = _mk_chapter(2)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps(
+                    {"comments": [{"target_p_ids": [0], "position": "before", "kind": "note", "content": "c"}]}
+                ),
+            }
+        )
+
+        def bad(_event: ProgressEvent) -> None:
+            raise RuntimeError("boom")
+
+        # Should not raise; the callback error is logged + swallowed.
+        anns = process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(),
+            progress_callback=bad,
+        )
+        assert len(anns) == 1
+
+    def test_no_callback_keeps_legacy_behavior(self) -> None:
+        chapter = _mk_chapter(3)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps(
+                    {"comments": [{"target_p_ids": [0], "position": "before", "kind": "note", "content": "c"}]}
+                ),
+            }
+        )
+        anns = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
+        assert len(anns) == 1

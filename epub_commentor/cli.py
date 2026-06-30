@@ -26,6 +26,7 @@ from .commentor import CommentorResult, comment_epub
 from .config import CommentConfig
 from .errors import CommentorError
 from .llm import LLM
+from .progress import make_default_progress_callback
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -91,6 +92,17 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Directory for the LLM response cache (default: none).",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=None,
+        help="Directory for debug logs (creates one request <timestamp>.log per LLMContext).",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging; defaults --log-dir to ./temp/logs/ if not set.",
     )
     parser.add_argument(
         "--cache-user-id",
@@ -233,17 +245,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     format_path = _resolve_format_json_path(args.source, args.format_json)
     llm = _load_llm(format_path)
 
-    # cache_path is forwarded to LLM directly (it controls where cache
-    # files land). It can't be set on CommentConfig because the config
-    # is supposed to be LLM-agnostic.
+    # cache_path and log_dir_path are forwarded to LLM directly (they
+    # control where cache / debug log files land). They can't be set on
+    # CommentConfig because the config is supposed to be LLM-agnostic.
+    cfg_overrides: dict[str, object] = {}
     if args.cache_path is not None:
-        # LLM doesn't accept a post-construction cache_path rewrite;
+        cfg_overrides["cache_path"] = str(args.cache_path.resolve())
+    log_dir: Path | None = args.log_dir
+    if args.debug and log_dir is None:
+        log_dir = Path("temp/logs")
+    if log_dir is not None:
+        cfg_overrides["log_dir_path"] = str(log_dir.resolve())
+        cfg_overrides["debug"] = True
+    if cfg_overrides:
+        # LLM doesn't accept post-construction rewrites of these paths;
         # we'd need to rebuild it. For simplicity we re-instantiate.
         cfg_dict = json.loads(format_path.read_text(encoding="utf-8"))
-        cfg_dict["cache_path"] = str(args.cache_path.resolve())
+        cfg_dict.update(cfg_overrides)
         llm = LLM(**cfg_dict)
 
     config = _build_config(args)
+
+    progress_callback = make_default_progress_callback(quiet=args.quiet)
 
     try:
         result = comment_epub(
@@ -251,6 +274,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output=args.output,
             llm=llm,
             config=config,
+            progress_callback=progress_callback,
         )
     except CommentorError as exc:
         print(f"commentor failed: {type(exc).__name__}: {exc}", file=sys.stderr)

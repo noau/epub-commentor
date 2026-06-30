@@ -69,10 +69,7 @@ def _format_private_memo_context(memo: ChapterMemo, max_items_per_section: int =
         sections.append(f"Common misreadings to avoid:\n{body}")
     if not sections:
         return ""
-    return (
-        "Internal context (private — never cite, never echo, "
-        "never say \"the memo says\"):\n\n" + "\n\n".join(sections)
-    )
+    return 'Internal context (private — never cite, never echo, never say "the memo says"):\n\n' + "\n\n".join(sections)
 
 
 def _format_annotate_user(
@@ -102,6 +99,11 @@ def _format_validation_error(error: Exception, raw: str) -> str:
         f"```\n{raw_excerpt}\n```\n\n"
         "Please reply with ONLY the corrected JSON object."
     )
+
+
+def _raw_excerpt(raw: str, limit: int = 400) -> str:
+    """Truncated raw response used for [[StageError]] log sections."""
+    return raw[:limit] + ("…" if len(raw) > limit else "")
 
 
 def _set_data_p_ids(block_ps: list[Element]) -> None:
@@ -170,6 +172,13 @@ def annotate_block(
                     return validate_block_annotations(parsed, block_size=len(block_ps))
                 except (ValidationError, CommentOrphanPIdError, CommentOverlapError) as exc:
                     last_error = exc
+                    if ctx.logger is not None:
+                        ctx.logger.warning(
+                            f"[[StageError]] stage=annotate; "
+                            f"attempt={retry + 1}/{config.max_json_retries}; "
+                            f"error={type(exc).__name__}: {exc}\n"
+                            f"Raw excerpt:\n{_raw_excerpt(raw)}\n"
+                        )
                     if retry == config.max_json_retries - 1:
                         break
                     messages.append(Message(MessageRole.ASSISTANT, raw))
@@ -178,6 +187,11 @@ def annotate_block(
         _strip_data_p_ids(block_ps)
 
     assert last_error is not None  # always set when we exit the retry loop without returning
+    if ctx.logger is not None:
+        ctx.logger.error(
+            f"[[FinalError]] stage=annotate; attempts_exhausted=true; "
+            f"exception={type(last_error).__name__}: {last_error}\n"
+        )
     raise CommentInvalidJSONError(
         f"Stage 2 (annotate) could not parse a valid BlockAnnotation after "
         f"{config.max_json_retries} attempts: {last_error}"

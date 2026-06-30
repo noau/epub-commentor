@@ -99,18 +99,43 @@ print(f"总 token 数: {result.total_tokens}")
 
 ### 带进度条
 
+CLI 默认装一个两层 `tqdm` 进度条：外层显示章节进度，内层显示当前章节的块进度。`extract` / `inject` 阶段则用 `tqdm.write()` 输出单行状态文字。
+
+如果你想在脚本里手动控制，可以装同样的渲染器，也可以自己实现：
+
 ```python
-from tqdm import tqdm
+from epub_commentor import (
+    LLM,
+    comment_epub,
+    CommentConfig,
+    ProgressEvent,
+    make_default_progress_callback,
+)
 
-with tqdm(total=100, desc="评注中", unit="%") as pbar:
-    last = {"v": 0.0}
-    def on_progress(stage: str, current: int, total: int) -> None:
-        # 阶段顺序：extract → process → inject
-        ratio = {"extract": 0.1, "process": 0.85, "inject": 1.0}[stage] * 100
-        pbar.update(ratio - last["v"])
-        last["v"] = ratio
+llm = LLM(...)
+config = CommentConfig(...)
 
-    comment_epub(source="book.epub", llm=llm, config=config, progress_callback=on_progress)
+# 默认渲染器：stderr 上画两个 tqdm bar（quiet=True 完全静默）
+progress = make_default_progress_callback(quiet=False)
+result = comment_epub(source="book.epub", llm=llm, config=config, progress_callback=progress)
+```
+
+`ProgressEvent` 携带渲染所需的全部信息：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `stage` | `str` | `"extract"` / `"process"` / `"inject"`。 |
+| `substage` | `str \| None` | 仅 `process` 阶段会设：`"scan"`（章节）或 `"annotate"`（块）。 |
+| `current` / `total` | `int` | 当前 stage 内的进度。 |
+| `message` | `str \| None` | 自由文本（比如章节标题）。 |
+
+```python
+# 自定义渲染器示例：把每个事件写日志而不是用 tqdm
+def log_progress(event: ProgressEvent) -> None:
+    label = event.substage or event.stage
+    print(f"[{label}] {event.current}/{event.total}  {event.message or ''}")
+
+comment_epub(source="book.epub", llm=llm, config=config, progress_callback=log_progress)
 ```
 
 ## API 参考
@@ -125,7 +150,7 @@ with tqdm(total=100, desc="评注中", unit="%") as pbar:
 | `output` | `Path \| str \| None` | 输出位置。`None` → 源文件旁的 `<stem>.commented.epub`。 |
 | `llm` | `LLMProtocol` | 满足 protocol 的任何 LLM（生产用 `LLM`，测试用 `MockLLM`）。 |
 | `config` | `CommentConfig \| None` | 流水线配置。`None` → 走默认值。 |
-| `progress_callback` | `(stage, current, total) -> None \| None` | 进度回调。阶段依次：`extract`、`process`、`inject`。 |
+| `progress_callback` | `Callable[[ProgressEvent], None] \| None` | 可选钩子，阶段起止 + 每个 chapter / 每个 block 完成时触发。详见 [带进度条](#带进度条)。 |
 
 返回 `CommentorResult`，含 `output_path`、`annotations`、处理 / 跳过的章节计数以及 LLM 的 token 用量（`total_tokens` / `input_tokens` / `input_cache_tokens` / `output_tokens`）。
 
@@ -169,13 +194,14 @@ CommentPosition.AFTER   # "after"
 poetry run epub-commentor SOURCE [-o OUTPUT] [--format-json PATH] [--synopsis TEXT]
                               [--block-size N] [--concurrency N]
                               [--max-json-retries N] [--max-scan-retries N]
-                              [--cache-path DIR] [--cache-user-id ID]
+                              [--cache-path DIR] [--log-dir DIR] [--debug]
+                              [--cache-user-id ID]
                               [--target-language LANG]
                               [--css-path PATH] [--no-css]
                               [--fail-on-empty-chapter] [-q]
 ```
 
-所有旗标一一映射到 `CommentConfig` 字段（外加 `--cache-path` 给 LLM 缓存用）。`epub-commentor --help` 可见完整列表。
+所有旗标一一映射到 `CommentConfig` 字段（外加 `--cache-path` / `--log-dir` / `--debug` 给 LLM 用）。`epub-commentor --help` 可见完整列表。
 
 ## 配置说明
 
@@ -293,10 +319,48 @@ except CommentorError as exc:
 - **章内**：通过 `ThreadPoolExecutor(max_workers=concurrency)` 并发。同一章内的 Stage 2 块相互独立。
 - **缓存**：`LLMContext` 在全局锁下提交缓存写入，避免多线程竞态。
 
+## Debug 日志
+
+长书跑到第 17/28 章突然出错时，光看 tqdm bar 是不够的。给 CLI 加 `--log-dir PATH`（或在 `format.json` 里设 `log_dir_path`），Commentor 会为每个 LLM 上下文写一份 `request YYYY-MM-DD HH-MM-SS.log`，里面的结构化段落可以 grep 定位问题：
+
+```bash
+# 开启 debug 日志，落地到 ./temp/logs
+poetry run epub-commentor tests/assets/The\ little\ prince.epub \
+    --synopsis "..." --log-dir ./temp/logs --debug
+```
+
+```
+08:29:12    [[Parameters]]:
+              temperature=0.4
+              top_p=0.9
+              max_tokens=None
+              cache_key=901e9296231d
+08:29:12    [[Request]]:
+              System: ...
+              User: ...
+08:29:12    [[CacheCheck]] cache_key=901e9296231d; hit=false
+08:29:14    [[Response]]:
+              {"comments": [...]}
+08:29:15    [[StageError]] stage=annotate; attempt=1/3; error=ValidationError: ...
+              Raw excerpt: {"comments": [{"target_p_ids": ...
+08:29:18    [[FinalError]] stage=annotate; attempts_exhausted=true; exception=...
+```
+
+| 段落 | 写入方 | 含义 |
+|---|---|---|
+| `[[Parameters]]` | `LLMExecutor` | 当次请求的 temperature / top_p / max_tokens / cache_key。 |
+| `[[Request]]` | `LLMExecutor` | 完整的 system + user 消息（含重试时回灌的 assistant 消息）。 |
+| `[[Response]]` | `LLMExecutor` | 当次尝试的原始模型输出。 |
+| `[[CacheCheck]] cache_key=<前缀>; hit=<bool>` | `LLMContext` | 缓存命中 / 未命中；和 `[[Parameters]]` 里的 `cache_key` 对照可还原完整请求。 |
+| `[[StageError]] stage=<scan\|annotate>; attempt=N/M; error=...; Raw excerpt: <截断>` | `memo.py` / `block.py` | JSON 校验失败；raw excerpt 让你看到模型实际回了什么。 |
+| `[[FinalError]] stage=...; attempts_exhausted=true; exception=...` | `block.py` | 重试全部用尽、即将抛 `CommentInvalidJSONError` 前的最后异常。 |
+
+> `scripts/check_duplicate_ids.py` 继续兼容——它扫 `<aside id=` 模式，新增的段不会产生误报。
+
 ## 测试
 
 ```bash
-# 全部单元 / 集成 / 端到端（约 173 用例，包含真实 EPUB 资产）
+# 全部单元 / 集成 / 端到端（约 185 用例，包含真实 EPUB 资产）
 poetry run pytest tests/ -v
 
 # 仅评注相关测试
@@ -306,7 +370,7 @@ poetry run pytest tests/test_commentor_*.py -v
 poetry run python scripts/comment_challenge.py
 ```
 
-`tests/_mock_llm.py` 提供 `MockLLM`，按 cache seed 前缀（`:scan:` / `:annotate:`）分发预制 JSON 响应，因此整条流水线都能在不连 OpenAI 的情况下跑一遍。
+`tests/_mock_llm.py` 提供 `MockLLM`，按 cache seed 前缀（`:scan:` / `:annotate:`）分发预制 JSON 响应。`MockLLM(log_dir_path=...)` 还能让 mock 写出和产线 `LLM` 同格式的 `[[Section]]` 文件——`tests/test_commentor_log.py` 借此在零网络情况下断言日志内容。
 
 ## 相关项目
 

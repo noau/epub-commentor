@@ -2,6 +2,8 @@ import hashlib
 import json
 import threading
 import uuid
+from collections.abc import Callable
+from logging import Logger
 from pathlib import Path
 from typing import Self
 
@@ -21,6 +23,7 @@ class LLMContext:
         cache_seed_content: str | None,
         top_p: Increasable,
         temperature: Increasable,
+        create_logger: Callable[[], Logger | None] | None = None,
     ) -> None:
         self._executor = executor
         self._cache_path = cache_path
@@ -29,8 +32,30 @@ class LLMContext:
         self._temperature: Increaser = temperature.context()
         self._context_id = uuid.uuid4().hex[:12]
         self._temp_files: set[Path] = set()
+        # ``create_logger`` returns a fresh FileHandler each invocation;
+        # we call it once per context so retries share one log file.
+        self._create_logger = create_logger
+        self._logger: Logger | None = None
+        # Ensure the cache directory exists so callers that construct
+        # ``LLMContext`` directly (e.g. tests) don't have to mkdir first.
+        if self._cache_path is not None and not self._cache_path.exists():
+            self._cache_path.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def logger(self) -> Logger | None:
+        """Debug logger for this context (None when no log_dir_path is set).
+
+        Stage 1 / Stage 2 error paths use this to write ``[[StageError]]``
+        and ``[[FinalError]]`` sections into the same file that the
+        executor writes ``[[Parameters]]/[[Request]]/[[Response]]``
+        into, so a post-mortem of a bad run needs only one file per
+        chapter or block.
+        """
+        return self._logger
 
     def __enter__(self) -> Self:
+        if self._create_logger is not None:
+            self._logger = self._create_logger()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -60,8 +85,14 @@ class LLMContext:
                 cache_key = self._compute_messages_hash(messages)
                 permanent_cache_file = self._cache_path / f"{cache_key}.txt"
                 if permanent_cache_file.exists():
+                    if self._logger is not None:
+                        self._logger.debug(f"[[CacheCheck]] cache_key={cache_key[:12]}; hit=true\n")
                     cached_content = permanent_cache_file.read_text(encoding="utf-8")
                     return cached_content
+
+            if self._logger is not None:
+                short_key = cache_key[:12] if cache_key is not None else "(disabled)"
+                self._logger.debug(f"[[CacheCheck]] cache_key={short_key}; hit=false\n")
 
             if temperature is None:
                 temperature = self._temperature.current
@@ -75,6 +106,7 @@ class LLMContext:
                 temperature=temperature,
                 top_p=top_p,
                 cache_key=cache_key,
+                logger=self._logger,
             )
             # Save to temporary cache if cache_path is set
             if self._cache_path is not None and cache_key is not None:

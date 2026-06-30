@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from io import StringIO
 from logging import Logger
 from time import sleep
@@ -20,7 +19,6 @@ class LLMExecutor:
         timeout: float | None,
         retry_times: int,
         retry_interval_seconds: float,
-        create_logger: Callable[[], Logger | None],
         statistics: Statistics,
         extra_body: dict[str, object] | None = None,
     ) -> None:
@@ -28,7 +26,6 @@ class LLMExecutor:
         self._timeout: float | None = timeout
         self._retry_times: int = retry_times
         self._retry_interval_seconds: float = retry_interval_seconds
-        self._create_logger: Callable[[], Logger | None] = create_logger
         self._statistics = statistics
         self._extra_body: dict[str, object] | None = extra_body
         self._client = OpenAI(
@@ -44,11 +41,11 @@ class LLMExecutor:
         temperature: float | None,
         top_p: float | None,
         cache_key: str | None,
+        logger: Logger | None = None,
     ) -> str:
         response: str = ""
         last_error: Exception | None = None
         did_success = False
-        logger = self._create_logger()
 
         if logger is not None:
             parameters: list[str] = [

@@ -15,17 +15,23 @@ hand it to :func:`process_chapters` instead of a real OpenAI-backed
 client.
 
 The mock also exposes a request log so tests can assert on call order
-and message shape.
+and message shape. When ``log_dir_path`` is supplied the mock also
+writes per-context debug logs into that directory using the same
+``[[Parameters]] / [[Request]] / [[Response]] / [[StageError]] /
+[[FinalError]] / [[CacheCheck]]`` format as the production :class:`LLM`.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from logging import Logger
+from pathlib import Path
 from typing import Any, Self
 
 from jinja2 import Environment
 
+from epub_commentor.llm._debug_logger import make_request_logger
 from epub_commentor.llm.types import Message, MessageRole
 from epub_commentor.template import create_env
 
@@ -45,13 +51,34 @@ class _MockCall:
 
 
 class _MockLLMContext:
-    """A no-network stand-in for :class:`LLMContext`."""
+    """A no-network stand-in for :class:`LLMContext`.
 
-    def __init__(self, parent: MockLLM, cache_seed: str | None) -> None:
+    The optional ``create_logger`` factory is invoked on
+    :meth:`__enter__` exactly the way :class:`LLMContext` does so
+    ``ctx.logger`` returns a real Logger (or ``None`` when no log dir
+    was supplied) — letting ``block.py`` / ``memo.py`` write
+    ``[[StageError]]`` / ``[[FinalError]]`` sections without conditional
+    branching on mock vs. production.
+    """
+
+    def __init__(
+        self,
+        parent: MockLLM,
+        cache_seed: str | None,
+        create_logger: Any | None = None,
+    ) -> None:
         self._parent = parent
         self._cache_seed = cache_seed
+        self._create_logger = create_logger
+        self._logger: Logger | None = None
+
+    @property
+    def logger(self) -> Logger | None:
+        return self._logger
 
     def __enter__(self) -> Self:
+        if self._create_logger is not None:
+            self._logger = self._create_logger()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -85,6 +112,14 @@ class MockLLM:
       matches and a default is set; otherwise :class:`AssertionError`).
 
     The :attr:`calls` list records every invocation for assertions.
+
+    Parameters
+    ----------
+    log_dir_path:
+        Optional path. When supplied, every context built by
+        :meth:`context` opens a per-request debug log file under that
+        directory using the shared logger factory, mirroring
+        :class:`epub_commentor.llm.LLM`.
     """
 
     responses_by_seed: dict[str, str]
@@ -92,11 +127,13 @@ class MockLLM:
     call_count: int
     calls: list[_MockCall]
     _env: Environment
+    _log_dir_path: Path | None
 
     def __init__(
         self,
         responses_by_seed: dict[str, str] | None = None,
         default_response: str | None = None,
+        log_dir_path: Path | str | None = None,
     ) -> None:
         self.responses_by_seed = dict(responses_by_seed or {})
         self.default_response = default_response
@@ -106,6 +143,7 @@ class MockLLM:
         # way the production code does. This avoids accidental drift
         # between the mock and the real thing.
         self._env = create_env(self._prompts_path())
+        self._log_dir_path = Path(log_dir_path) if log_dir_path is not None else None
 
     @staticmethod
     def _prompts_path() -> Any:
@@ -118,7 +156,13 @@ class MockLLM:
         return self._env.get_template(template_name)
 
     def context(self, cache_seed_content: str | None = None) -> _MockLLMContext:
-        return _MockLLMContext(self, cache_seed_content)
+        return _MockLLMContext(self, cache_seed_content, create_logger=self._create_logger)
+
+    def _create_logger(self) -> Logger | None:
+        """Build a per-context debug logger when ``log_dir_path`` is set."""
+        if self._log_dir_path is None:
+            return None
+        return make_request_logger(self._log_dir_path, prefix="mock-request")
 
     def _route(self, seed: str | None, messages: list[Message]) -> str:
         self.call_count += 1
@@ -139,8 +183,7 @@ class MockLLM:
         if self.default_response is not None:
             return self.default_response
         raise AssertionError(
-            f"MockLLM has no response registered for cache_seed={seed!r}; "
-            f"known seeds: {sorted(self.responses_by_seed)}"
+            f"MockLLM has no response registered for cache_seed={seed!r}; known seeds: {sorted(self.responses_by_seed)}"
         )
 
     # ---- helpers used by the challenge case files ----

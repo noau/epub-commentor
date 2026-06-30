@@ -34,6 +34,7 @@ from epub_commentor.config import CommentConfig
 from epub_commentor.epub.zip import Zip
 from epub_commentor.llm.schema import ChapterMemo, CommentItem, CommentKind, CommentPosition
 from epub_commentor.pipeline.extract import Chapter, extract_chapters
+from epub_commentor.progress import ProgressEvent
 
 # ---------------------------------------------------------------------------
 # Config-translation tests
@@ -53,6 +54,8 @@ class TestBuildConfig:
             css_path=None,
             no_css=False,
             fail_on_empty_chapter=False,
+            log_dir=None,
+            debug=False,
         )
         cfg = _build_config(ns)
         assert isinstance(cfg, CommentConfig)
@@ -73,6 +76,8 @@ class TestBuildConfig:
             css_path=Path("custom/style.css"),
             no_css=True,
             fail_on_empty_chapter=True,
+            log_dir=Path("logs"),
+            debug=True,
         )
         cfg = _build_config(ns)
         assert cfg.book_synopsis == "A book"
@@ -122,6 +127,9 @@ class TestArgparseParser:
                 "6",
                 "--cache-path",
                 "cache",
+                "--log-dir",
+                "logs",
+                "--debug",
                 "--cache-user-id",
                 "bob",
                 "--target-language",
@@ -142,6 +150,8 @@ class TestArgparseParser:
         assert ns.max_json_retries == 5
         assert ns.max_scan_retries == 6
         assert ns.cache_path == Path("cache")
+        assert ns.log_dir == Path("logs")
+        assert ns.debug is True
         assert ns.cache_user_id == "bob"
         assert ns.target_language == "French"
         assert ns.css_path == Path("Styles/x.css")
@@ -349,10 +359,10 @@ class TestCommentEpub:
             }
         )
 
-        events: list[tuple[str, int, int]] = []
+        events: list[ProgressEvent] = []
 
-        def cb(stage: str, current: int, total: int) -> None:
-            events.append((stage, current, total))
+        def cb(event: ProgressEvent) -> None:
+            events.append(event)
 
         comment_epub(
             src,
@@ -361,7 +371,7 @@ class TestCommentEpub:
             config=CommentConfig(block_size=20),
             progress_callback=cb,
         )
-        stages = [e[0] for e in events]
+        stages = [e.stage for e in events]
         assert "extract" in stages
         assert "process" in stages
         assert "inject" in stages
@@ -381,7 +391,7 @@ class TestCommentEpub:
             }
         )
 
-        def bad_cb(_stage: str, _current: int, _total: int) -> None:
+        def bad_cb(_event: ProgressEvent) -> None:
             raise RuntimeError("boom")
 
         # Should not raise; the callback error is logged + swallowed.

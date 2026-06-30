@@ -1,8 +1,6 @@
-import datetime
-import threading
 from collections.abc import Generator
 from importlib.resources import files
-from logging import DEBUG, FileHandler, Formatter, Logger, getLogger
+from logging import Logger
 from os import PathLike
 from pathlib import Path
 
@@ -10,16 +8,12 @@ from jinja2 import Environment, Template
 from tiktoken import Encoding, get_encoding
 
 from ..template import create_env
+from ._debug_logger import make_request_logger
 from .context import LLMContext
 from .executor import LLMExecutor
 from .increasable import Increasable
 from .statistics import Statistics
 from .types import Message
-
-# Global state for logger filename generation
-_LOGGER_LOCK = threading.Lock()
-_LAST_TIMESTAMP: str | None = None
-_LOGGER_SUFFIX_ID: int = 1
 
 
 class LLM:
@@ -45,7 +39,7 @@ class LLM:
         self._top_p: Increasable = Increasable(top_p)
         self._temperature: Increasable = Increasable(temperature)
         self._cache_path: Path | None = self._ensure_dir_path(cache_path)
-        self._logger_save_path: Path | None = self._ensure_dir_path(log_dir_path)
+        self._log_dir_path: Path | None = self._ensure_dir_path(log_dir_path)
         self._statistics = Statistics()
         self._executor = LLMExecutor(
             url=url,
@@ -54,7 +48,6 @@ class LLM:
             timeout=timeout,
             retry_times=retry_times,
             retry_interval_seconds=retry_interval_seconds,
-            create_logger=self._create_logger,
             statistics=self._statistics,
             extra_body=extra_body,
         )
@@ -86,6 +79,7 @@ class LLM:
             cache_seed_content=cache_seed_content,
             top_p=self._top_p,
             temperature=self._temperature,
+            create_logger=self._create_logger,
         )
 
     def request(
@@ -121,41 +115,12 @@ class LLM:
         return dir_path.resolve()
 
     def _create_logger(self) -> Logger | None:
-        # pylint: disable=global-statement
-        global _LAST_TIMESTAMP, _LOGGER_SUFFIX_ID
+        """Build a per-context request logger.
 
-        if self._logger_save_path is None:
-            return None
-
-        now = datetime.datetime.now(datetime.UTC)
-        # Use second-level precision for collision detection
-        timestamp_key = now.strftime("%Y-%m-%d %H-%M-%S")
-
-        with _LOGGER_LOCK:
-            if _LAST_TIMESTAMP == timestamp_key:
-                _LOGGER_SUFFIX_ID += 1
-                suffix_id = _LOGGER_SUFFIX_ID
-            else:
-                _LAST_TIMESTAMP = timestamp_key
-                _LOGGER_SUFFIX_ID = 1
-                suffix_id = 1
-
-        if suffix_id == 1:
-            file_name = f"request {timestamp_key}.log"
-            logger_name = f"LLM Request {timestamp_key}"
-        else:
-            file_name = f"request {timestamp_key}_{suffix_id}.log"
-            logger_name = f"LLM Request {timestamp_key}_{suffix_id}"
-
-        file_path = self._logger_save_path / file_name
-        logger = getLogger(logger_name)
-        logger.setLevel(DEBUG)
-        handler = FileHandler(file_path, encoding="utf-8")
-        handler.setLevel(DEBUG)
-        handler.setFormatter(Formatter("%(asctime)s    %(message)s", "%H:%M:%S"))
-        logger.addHandler(handler)
-
-        return logger
+        Returns ``None`` when no ``log_dir_path`` was supplied so that
+        :class:`LLMContext` simply skips every debug logging call.
+        """
+        return make_request_logger(self._log_dir_path)
 
     def _search_quotes(self, kind: str, response: str) -> Generator[str, None, None]:
         start_marker = f"```{kind}"
@@ -191,7 +156,7 @@ class LLM:
         for i in range(start, raw_len - sub_len + 1):
             match = True
             for j in range(sub_len):
-                if raw[i + j].lower() != sub[j].lower():
+                if raw[i].lower() != sub[j].lower():
                     match = False
                     break
             if match:

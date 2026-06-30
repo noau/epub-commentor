@@ -23,6 +23,7 @@ from ..llm.block import annotate_block
 from ..llm.memo import scan_chapter
 from ..llm.protocol import LLMProtocol
 from ..llm.schema import ChapterMemo, CommentItem
+from ..progress import ProgressCallback, ProgressEvent
 from .extract import Chapter
 
 _logger = logging.getLogger(__name__)
@@ -76,12 +77,25 @@ def _split_blocks(chapter: Chapter, block_size: int) -> list[tuple[int, list]]:
     return blocks
 
 
+def _emit(
+    callback: ProgressCallback | None,
+    event: ProgressEvent,
+) -> None:
+    """Mirror the commentor-level helper so this module is self-contained."""
+    if callback is None:
+        return
+    try:
+        callback(event)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("progress callback raised %s: %s", type(exc).__name__, exc)
+
+
 def _process_chapter(
-    index: str,
     chapter: Chapter,
     book_metadata: dict[str, str],
     llm: LLMProtocol,
     config: CommentConfig,
+    progress_callback: ProgressCallback | None = None,
 ) -> ChapterAnnotation:
     """Stage 1 + Stage 2 for a single chapter (sequential per chapter).
 
@@ -101,7 +115,6 @@ def _process_chapter(
         return ChapterAnnotation(chapter=chapter, memo=_empty_memo(), comments=[])
 
     prompt_metadata = {k: v for k, v in book_metadata.items() if k not in _RESERVED_METADATA_KEYS}
-    print(f"{index}\tExtracting ChapterMemo for Chapter: {chapter.title}")
     memo = scan_chapter(
         body=chapter.body,
         chapter_path=chapter.path,
@@ -111,13 +124,15 @@ def _process_chapter(
         config=config,
     )
 
-    print(f"{index}\tSplitting Chapter: {chapter.title}")
     blocks = _split_blocks(chapter, config.block_size)
     chapter_hash = _chapter_hash(chapter.path)
 
     block_count = len(blocks)
     processed_block = 0
-    print(f"{index}\tSplitted Chapter {chapter.title} into {block_count} blcoks")
+    _emit(
+        progress_callback,
+        ProgressEvent(stage="process", substage="annotate", current=0, total=max(block_count, 1)),
+    )
 
     comments: list[CommentItem] = []
     if not blocks:
@@ -140,8 +155,15 @@ def _process_chapter(
             block_comments = future.result()
 
             processed_block += 1
-            print(f"{index}\tCommented blocks: {processed_block}/{block_count}")
-            print(block_comments)
+            _emit(
+                progress_callback,
+                ProgressEvent(
+                    stage="process",
+                    substage="annotate",
+                    current=processed_block,
+                    total=block_count,
+                ),
+            )
 
             # Translate block-local p_ids to absolute paragraph indices so
             # downstream injection can map them via body.iter("p") directly.
@@ -161,12 +183,18 @@ def process_chapters(
     book_metadata: dict[str, str],
     llm: LLMProtocol,
     config: CommentConfig,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[ChapterAnnotation]:
     """Run Stage 1 + Stage 2 across all chapters.
 
     Chapters are processed sequentially to keep Stage 1 simple and avoid
     Stage 1/Stage 2 inter-chapter races. Within a chapter, blocks run
     concurrently via :class:`ThreadPoolExecutor`.
+
+    When ``progress_callback`` is supplied, two event flavours are
+    emitted per chapter: a ``process / scan`` event (chapter
+    scan completion) and one ``process / annotate`` event per
+    block, plus a synthetic 0-of-N event right after splitting.
     """
     chapter_count = len(chapters)
     processing = 0
@@ -174,16 +202,24 @@ def process_chapters(
     annotations: list[ChapterAnnotation] = []
     for chapter in chapters:
         processing += 1
-        index = f"({processing}/{chapter_count})"
-        print(f"{index}\tProcessing Chapter: {chapter.title}")
+        _emit(
+            progress_callback,
+            ProgressEvent(
+                stage="process",
+                substage="scan",
+                current=processing,
+                total=chapter_count,
+                message=chapter.title,
+            ),
+        )
 
         annotations.append(
             _process_chapter(
-                index=index,
                 chapter=chapter,
                 book_metadata=book_metadata,
                 llm=llm,
                 config=config,
+                progress_callback=progress_callback,
             )
         )
     return annotations

@@ -78,6 +78,7 @@ def scan_chapter(
         chapter_full_text=plain_text(body),
     )
 
+    raw: str
     with llm.context(cache_seed_content=seed) as ctx:
         raw = ctx.request(
             [
@@ -89,6 +90,11 @@ def scan_chapter(
     try:
         return ChapterMemo.model_validate_json(raw)
     except ValidationError as error:
+        if ctx.logger is not None:
+            excerpt = raw[:400] + ("…" if len(raw) > 400 else "")
+            ctx.logger.error(
+                f"[[StageError]] stage=scan; attempt=1; error=ValidationError: {error}\nRaw excerpt:\n{excerpt}\n"
+            )
         raise CommentScanFailedError(
             f"Stage 1 (scan) returned invalid ChapterMemo JSON for {chapter_path.as_posix()}: {error}"
         ) from error

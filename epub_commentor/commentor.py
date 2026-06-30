@@ -20,7 +20,6 @@ double), so unit tests can drive the full stack without an OpenAI call.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,11 +27,12 @@ from .config import CommentConfig
 from .epub.zip import Zip
 from .llm.protocol import LLMProtocol
 from .pipeline import ChapterAnnotation, extract_chapters, inject_annotations, process_chapters
+from .progress import ProgressCallback, ProgressEvent
 
 _logger = logging.getLogger(__name__)
 
-# Optional progress hook signature: ``callback(stage: str, current: int, total: int)``.
-ProgressCallback = Callable[[str, int, int], None]
+# Re-exported for callers that prefer importing from ``epub_commentor``.
+__all__ = ["CommentorResult", "ProgressCallback", "comment_epub"]
 
 
 @dataclass
@@ -72,9 +72,7 @@ def _default_output_path(source: Path) -> Path:
 
 def _emit_progress(
     callback: ProgressCallback | None,
-    stage: str,
-    current: int,
-    total: int,
+    event: ProgressEvent,
 ) -> None:
     """Fire a progress callback if one was supplied; swallow handler errors.
 
@@ -85,7 +83,7 @@ def _emit_progress(
     if callback is None:
         return
     try:
-        callback(stage, current, total)
+        callback(event)
     except Exception as exc:  # noqa: BLE001
         _logger.warning("progress callback raised %s: %s", type(exc).__name__, exc)
 
@@ -135,9 +133,10 @@ def comment_epub(
         Pipeline configuration. ``None`` uses :class:`CommentConfig`'s
         defaults.
     progress_callback:
-        Optional ``(stage, current, total)`` hook for CLI progress
-        bars. Stages fired (in order): ``"extract"``, ``"process"``,
-        ``"inject"``.
+        Optional :class:`~epub_commentor.progress.ProgressEvent` hook
+        for CLI progress bars. Stages fired (in order):
+        ``"extract"``, ``"process"`` (with ``substage="scan"`` /
+        ``"annotate"`` events emitted by the pipeline), ``"inject"``.
 
     Returns
     -------
@@ -150,29 +149,30 @@ def comment_epub(
     source_path = Path(source).resolve()
     target_path = Path(output).resolve() if output is not None else _default_output_path(source_path)
 
-    _emit_progress(progress_callback, "extract", 0, 1)
+    _emit_progress(progress_callback, ProgressEvent(stage="extract", current=0, total=1))
 
     with Zip(source_path, target_path) as z:
         chapters, book_metadata = extract_chapters(z)
-        _emit_progress(progress_callback, "extract", 1, 1)
+        _emit_progress(progress_callback, ProgressEvent(stage="extract", current=1, total=1))
 
         total = max(len(chapters), 1)
-        _emit_progress(progress_callback, "process", 0, total)
+        _emit_progress(progress_callback, ProgressEvent(stage="process", current=0, total=total, substage="scan"))
 
-        # The pipeline mutates chapter bodies in place; we surface a
-        # 1-of-N progress hint before and after process so the CLI can
-        # render a per-chapter bar.
+        # The pipeline mutates chapter bodies in place; it emits its own
+        # sub-stage events (process/scan + process/annotate) when a
+        # callback is supplied.
         annotations = process_chapters(
             chapters=chapters,
             book_metadata=book_metadata,
             llm=llm,
             config=cfg,
+            progress_callback=progress_callback,
         )
-        _emit_progress(progress_callback, "process", total, total)
+        _emit_progress(progress_callback, ProgressEvent(stage="process", current=total, total=total, substage="scan"))
 
-        _emit_progress(progress_callback, "inject", 0, 1)
+        _emit_progress(progress_callback, ProgressEvent(stage="inject", current=0, total=1))
         inject_annotations(zip=z, annotations=annotations, config=cfg, book_metadata=book_metadata)
-        _emit_progress(progress_callback, "inject", 1, 1)
+        _emit_progress(progress_callback, ProgressEvent(stage="inject", current=1, total=1))
 
     chapters_processed, chapters_skipped = _count_chapters(annotations)
 

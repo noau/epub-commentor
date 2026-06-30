@@ -23,6 +23,7 @@ from .pipeline import (
     ChapterAnnotation,
     inject_annotations,
 )
+from .progress import ProgressCallback, ProgressEvent, make_default_progress_callback
 
 __all__ = [
     "Chapter",
@@ -38,6 +39,9 @@ __all__ = [
     "LLM",
     "Message",
     "MessageRole",
+    "ProgressCallback",
+    "ProgressEvent",
     "comment_epub",
     "inject_annotations",
+    "make_default_progress_callback",
 ]
