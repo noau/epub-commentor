@@ -146,6 +146,26 @@ poetry run pyright epub_commentor
 - `check_duplicate_ids.py`（[已实现]）— 扫描 `temp/logs/*.log`，定位重复 ID
 - `utils.py:load_comment_llm()` — 读 `format.json` 构造**单个** LLM
 
+### Annotation Philosophy
+
+EPUB Commentor 把 AI 评注定位为**页边的陪伴者**，而不是居高临下的解释者。整套 prompt / schema / CSS 都是这一哲学的具体落地：
+
+- **Chapter memo 是 Stage 2 的私有工作笔记**，**永不**出现在最终 EPUB 中。读者看不到 memo，模型也不应在 `content` 里引用或复述它。Stage 2 只是在 memo 的隐性指导下生成评注。
+- **三种 `kind` 各有语气**：`intro` 像主持上场、`summary` 像后排朋友的口吻收束、`note` 像页边的铅笔印——一组并置的小声音，不是单一独白。
+- **温和密度规则**：`annotate.jinja` 的 Rule #5.6 鼓励大多数 block 用满三种 kind，但**不**做硬约束。空 block 罕见但允许存在；只有 `note` 的 block 常常意味着缺 `intro` 或 `summary`。
+- **CSS 把三种 kind 编码为"安静的视觉层级"**：`intro` 细虚线左缘（最轻）、`note` 中等实线+更深缩进（铅笔印）、`summary` 较粗实线（明确收束）。没有任何一边框，评注读起来不像"框"——更像读者身边的伴读印记。
+- **`<aside class="commentary commentary-{kind}">`** 输出的三段式（intro / summary / note）对应古书"夹注 / 回末总评 / 行间小字"的传统。
+
+### Schema 中的私有 hint 字段
+
+`ChapterMemo`（`epub_commentor/llm/schema.py`）除了 6 个读者面向字段外，新增 3 个**可选 list[str]** 字段供 Stage 2 内部使用：
+
+- `motifs` — 本章反复出现的图像 / 符号 / 概念，0-8 条
+- `foreshadowing` — 本章早段埋伏、后段兑现的 hook，0-5 条
+- `interpretive_warnings` — 粗心读者可能误读作者意图的地方，0-5 条
+
+这三个字段在 `epub_commentor/llm/block.py:_format_private_memo_context` 中拼成 Stage 2 user 消息的一段"Internal context (private — never cite, never echo)"。它们**不会**出现在最终 EPUB 中，pydantic 用 `default_factory=list` 兼容旧 JSON。
+
 ## 单 LLM 架构
 
 **只用一个 LLM**（不再需要 translation / fill 双 LLM）。原因：评注任务的输出（JSON）结构化程度高，单一温度（如 0.4）足以兼顾"有文采"和"结构稳定"。
