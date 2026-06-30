@@ -27,7 +27,16 @@ class KeyTerm(BaseModel):
 
 
 class ChapterMemo(BaseModel):
-    """Stage 1 output: a compact summary used to guide Stage 2."""
+    """Stage 1 output: a compact summary used to guide Stage 2.
+
+    In addition to the reader-facing summary fields (``core_thesis``,
+    ``outline`` ...), three **internal-hint** fields carry private working
+    notes for Stage 2 — they are never rendered into the final EPUB:
+
+    - ``motifs`` — recurring images / symbols / ideas worth tracking.
+    - ``foreshadowing`` — earlier beats that pay off later.
+    - ``interpretive_warnings`` — places where a careless reader will misread.
+    """
 
     core_thesis: str = Field(...)
     outline: list[str] = Field(...)
@@ -35,6 +44,10 @@ class ChapterMemo(BaseModel):
     tone: str = Field(...)
     target_audience: str = Field(...)
     reading_anchors: list[str] = Field(default_factory=list)
+    # NEW — internal hints for Stage 2, never rendered to the final reader
+    motifs: list[str] = Field(default_factory=list)
+    foreshadowing: list[str] = Field(default_factory=list)
+    interpretive_warnings: list[str] = Field(default_factory=list)
 
 
 class CommentPosition(str, Enum):
