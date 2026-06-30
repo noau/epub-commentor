@@ -15,6 +15,14 @@ def _read_data_file() -> str:
     return resources.files("epub_commentor.data").joinpath("commentary.css").read_text(encoding="utf-8")
 
 
+def _selector_block(css: str, selector: str) -> str:
+    """Return the body of the first ``selector { ... }`` block, or fail loudly."""
+    idx = css.find(selector + " {")
+    assert idx > -1, f"missing {selector} block in commentary.css"
+    end = css.find("}", idx)
+    return css[idx:end]
+
+
 class TestCommentaryCss:
     def test_three_kind_classes_present(self) -> None:
         css = _read_data_file()
@@ -60,3 +68,38 @@ class TestCommentaryCss:
         loaded = _load_commentary_css()
         on_disk = resources.files("epub_commentor.data").joinpath("commentary.css").read_bytes()
         assert loaded == on_disk
+
+    def test_no_italic_in_note(self) -> None:
+        """Part IX #6 — .commentary-note must not be italic.
+
+        Italic slants are harder to sustain on e-ink displays, and the
+        companion-reader aesthetic deliberately keeps notes upright.
+        """
+        css = _read_data_file()
+        block = _selector_block(css, ".commentary-note")
+        assert "font-style" not in block, f"italic must be removed by Part IX #6; got: {block!r}"
+
+    def test_kind_left_border_hierarchy(self) -> None:
+        """Companion visual hierarchy: note ≤ summary in left-border weight.
+
+        intro = thinnest (lighter-weight marker), note = mid-weight (margin
+        scribble), summary = heaviest (clearer recap). The note kind is
+        allowed to equal intro (both 3px) — the dashed/solid distinction
+        carries the difference — but summary must be the heaviest.
+        """
+        import re
+
+        css = _read_data_file()
+
+        def first_px_in_border_left(selector: str) -> int:
+            block = _selector_block(css, selector)
+            # Prefer the border-left shorthand's first px
+            m = re.search(r"border-left[^:]*:\s*\D*?(\d+)px", block)
+            assert m, f"no px width in {selector} block: {block!r}"
+            return int(m.group(1))
+
+        intro_px = first_px_in_border_left(".commentary-intro")
+        note_px = first_px_in_border_left(".commentary-note")
+        summary_px = first_px_in_border_left(".commentary-summary")
+        assert intro_px <= note_px, f"intro ({intro_px}px) should not exceed note ({note_px}px)"
+        assert note_px <= summary_px, f"note ({note_px}px) should not exceed summary ({summary_px}px)"

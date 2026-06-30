@@ -1,22 +1,26 @@
-/* commentary.css — EPUB commentary asides (e-ink friendly)
+/* commentary.css — EPUB marginalia (e-ink friendly)
  *
  * Designed for 6-inch e-ink screens (Kindle, Kobo, Boox):
  *   - pure grayscale; no background color (avoids night-mode invert)
+ *   - one left rule only — no boxed panels, no three-sided borders
  *   - border + line-height to provide visual separation, no box-shadow
  *   - page-break-inside: avoid keeps the aside glued to its anchor paragraph
  *   - overflow-wrap survives long URLs in NOTE entries
  *   - reset <p> margin/indent so asides don't inherit body typography
+ *
+ * The three kinds (intro / summary / note) form a quiet visual hierarchy:
+ * intro = thinnest rule (a marker), note = mid-weight (a margin scribble),
+ * summary = heaviest (a clearer recap). Companion-reader aesthetic — each
+ * note stands upright on its own (Part IX #6: italic was removed because
+ * e-ink diagonals read harder than upright across long passages).
  */
 
 .commentary {
-  margin: 1em 0.5em 1.2em 1.5em;
-  padding: 0.6em 0.8em;
+  margin: 0.5em 0.5em 0.5em 1.8em;
+  padding: 0.2em 0.5em 0.2em 0.7em;
   border-left: 3px solid #555;
-  border-top: 1px solid #ddd;
-  border-bottom: 1px solid #ddd;
-  border-right: 1px solid #ddd;
-  font-size: 0.95em;
-  line-height: 1.6;
+  font-size: 0.9em;
+  line-height: 1.45;
   font-style: normal;
   break-inside: avoid;
   page-break-inside: avoid;
@@ -24,7 +28,7 @@
 }
 
 .commentary p {
-  margin: 0 0 0.5em 0;
+  margin: 0 0 0.4em 0;
   padding: 0;
   text-indent: 0;
 }
@@ -33,24 +37,32 @@
   margin-bottom: 0;
 }
 
-/* INTRO — prelude to a section, light dashed left rule */
+/* INTRO — prelude to a section, thinner dashed left rule */
 .commentary-intro {
-  border-left-style: dashed;
-  border-left-color: #000;
+  border-left: 2px dashed #000;
 }
 
-/* SUMMARY — recap of a section, solid bold-ish left rule */
+/* SUMMARY — recap of a section, heavier solid left rule */
 .commentary-summary {
-  border-left-width: 4px;
-  border-left-color: #000;
-  border-top-color: #888;
-  border-bottom-color: #888;
+  border-left: 5px solid #000;
 }
 
-/* NOTE — marginalia, double left rule, italic, deeper indent */
+/* NOTE — pencil mark in the margin, solid mid-weight rule + deeper indent.
+ * No italic (Part IX #6 — e-ink readers handle upright text better than
+ * slanted text across sustained reading).
+ */
 .commentary-note {
-  border-left-style: double;
-  border-left-color: #333;
-  font-style: italic;
-  margin-left: 2em;
+  border-left: 3px solid #333;
+  margin-left: 2.3em;
+  padding-right: 0.5em;
+}
+
+/* Reserved for future transitions; the rule of thumb recorded here is
+ * "prefer whitespace over decoration" — long asides with motion become
+ * tiring on e-ink. Empty block by design.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .commentary {
+    /* No transitions today; placeholder for future static-only additions. */
+  }
 }
