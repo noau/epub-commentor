@@ -16,6 +16,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from .. import errors as _errors
+
 
 class KeyTerm(BaseModel):
     """Single term/glossary pair returned by Stage 1."""
@@ -65,12 +67,18 @@ class BlockAnnotation(BaseModel):
     comments: list[CommentItem] = Field(default_factory=list)
 
 
-class CommentOrphanPIdError(ValueError):
-    """A comment references p_ids outside the block, or a non-contiguous range."""
+class CommentOrphanPIdError(_errors.CommentOrphanPIdError):
+    """Deprecated shim — kept for backward compatibility.
+
+    The canonical definition lives in :mod:`epub_commentor.errors`. This
+    alias exists so existing ``except CommentOrphanPIdError`` blocks (in
+    tests and external callers) keep working; new code should import the
+    class from :mod:`epub_commentor.errors` directly.
+    """
 
 
-class CommentOverlapError(ValueError):
-    """Two comments inside the same block share one or more p_ids."""
+class CommentOverlapError(_errors.CommentOverlapError):
+    """Deprecated shim — see :class:`CommentOrphanPIdError` above."""
 
 
 def _format_pids(pids: list[int]) -> str:
@@ -95,7 +103,7 @@ def validate_block_annotations(ann: BlockAnnotation, block_size: int) -> list[Co
         # Range check
         for pid in comment.target_p_ids:
             if pid < 0 or pid >= block_size:
-                raise CommentOrphanPIdError(
+                raise _errors.CommentOrphanPIdError(
                     f"comment references out-of-range p_id {pid} "
                     f"(block_size={block_size}, got {_format_pids(comment.target_p_ids)})"
                 )
@@ -103,14 +111,14 @@ def validate_block_annotations(ann: BlockAnnotation, block_size: int) -> list[Co
         # Contiguity check
         sorted_pids = sorted(comment.target_p_ids)
         if sorted_pids != list(range(sorted_pids[0], sorted_pids[-1] + 1)):
-            raise CommentOrphanPIdError(
+            raise _errors.CommentOrphanPIdError(
                 f"comment target_p_ids must be contiguous, got {_format_pids(comment.target_p_ids)}"
             )
 
         # Overlap check (within the same block)
         for pid in sorted_pids:
             if pid in used:
-                raise CommentOverlapError(
+                raise _errors.CommentOverlapError(
                     f"p_id {pid} is targeted by more than one comment "
                     f"in the same block (duplicate range starts at {sorted_pids[0]})"
                 )

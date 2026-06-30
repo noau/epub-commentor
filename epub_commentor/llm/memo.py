@@ -19,6 +19,7 @@ from xml.etree.ElementTree import Element
 from pydantic import ValidationError
 
 from ..config import CommentConfig
+from ..errors import CommentScanFailedError
 from ..xml import plain_text
 from .core import LLM
 from .schema import ChapterMemo
@@ -88,7 +89,7 @@ def scan_chapter(
     try:
         return ChapterMemo.model_validate_json(raw)
     except ValidationError as error:
-        raise ValueError(
+        raise CommentScanFailedError(
             f"Stage 1 (scan) returned invalid ChapterMemo JSON for {chapter_path.as_posix()}: {error}"
         ) from error
 

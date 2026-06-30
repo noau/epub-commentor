@@ -17,15 +17,9 @@ from xml.etree.ElementTree import Element, tostring
 from pydantic import ValidationError
 
 from ..config import CommentConfig
+from ..errors import CommentInvalidJSONError, CommentOrphanPIdError, CommentOverlapError
 from .core import LLM
-from .schema import (
-    BlockAnnotation,
-    ChapterMemo,
-    CommentOrphanPIdError,
-    CommentOverlapError,
-    CommentPosition,
-    validate_block_annotations,
-)
+from .schema import BlockAnnotation, ChapterMemo, CommentPosition, validate_block_annotations
 from .types import Message, MessageRole
 
 try:
@@ -156,7 +150,7 @@ def annotate_block(
         _strip_data_p_ids(block_ps)
 
     assert last_error is not None  # always set when we exit the retry loop without returning
-    raise ValueError(
+    raise CommentInvalidJSONError(
         f"Stage 2 (annotate) could not parse a valid BlockAnnotation after "
         f"{config.max_json_retries} attempts: {last_error}"
     ) from last_error

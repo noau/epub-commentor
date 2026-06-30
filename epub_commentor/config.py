@@ -40,6 +40,7 @@ class CommentConfig:
     inject_css: bool = True
     css_path_in_epub: Path = field(default_factory=lambda: Path("Styles/commentary.css"))
     target_language: str = "English"
+    fail_on_empty_chapter: bool = False
 
 
 __all__ = ["CommentConfig"]

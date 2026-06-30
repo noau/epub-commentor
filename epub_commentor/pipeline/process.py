@@ -12,16 +12,20 @@ Stage 2 runs blocks concurrently because they are independent of each other.
 """
 
 import hashlib
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import CommentConfig
+from ..errors import CommentNoParagraphsError
 from ..llm.block import annotate_block
 from ..llm.core import LLM
 from ..llm.memo import scan_chapter
 from ..llm.schema import ChapterMemo, CommentItem
 from .extract import Chapter
+
+_logger = logging.getLogger(__name__)
 
 _RESERVED_METADATA_KEYS = frozenset({"__opf_path__"})
 
@@ -37,6 +41,21 @@ class ChapterAnnotation:
     chapter: Chapter
     memo: ChapterMemo
     comments: list[CommentItem] = field(default_factory=list)
+
+
+def _empty_memo() -> ChapterMemo:
+    """A sentinel :class:`ChapterMemo` used when a chapter is skipped.
+
+    The values are intentionally minimal but still satisfy the pydantic
+    constraints (``outline`` must have 3..7 items). The placeholder text
+    makes it obvious in logs that the chapter was skipped.
+    """
+    return ChapterMemo(
+        core_thesis="(chapter skipped — no <p> elements)",
+        outline=["(skipped)", "(skipped)", "(skipped)"],
+        tone="(unknown)",
+        target_audience="(unknown)",
+    )
 
 
 def _chapter_hash(chapter_path: Path) -> str:
@@ -63,7 +82,23 @@ def _process_chapter(
     llm: LLM,
     config: CommentConfig,
 ) -> ChapterAnnotation:
-    """Stage 1 + Stage 2 for a single chapter (sequential per chapter)."""
+    """Stage 1 + Stage 2 for a single chapter (sequential per chapter).
+
+    A chapter with zero ``<p>`` elements (e.g. a cover page, a list-only
+    table of contents, an image-only page) is silently skipped: a warning
+    is logged and an empty :class:`ChapterAnnotation` is returned. The
+    caller's :func:`process_chapters` accumulates these without raising.
+    Set ``config.fail_on_empty_chapter=True`` to make this raise
+    :class:`~epub_commentor.errors.CommentNoParagraphsError` instead.
+    """
+    paragraphs = list(chapter.body.iter("p"))
+    if not paragraphs:
+        msg = f"chapter has zero <p> elements, skipping: {chapter.path.as_posix()}"
+        if getattr(config, "fail_on_empty_chapter", False):
+            raise CommentNoParagraphsError(msg)
+        _logger.warning(msg)
+        return ChapterAnnotation(chapter=chapter, memo=_empty_memo(), comments=[])
+
     prompt_metadata = {k: v for k, v in book_metadata.items() if k not in _RESERVED_METADATA_KEYS}
     memo = scan_chapter(
         body=chapter.body,

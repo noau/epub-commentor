@@ -30,13 +30,13 @@ from __future__ import annotations
 
 import os
 from importlib import resources
-from xml.etree.ElementTree import Element, SubElement
 from pathlib import Path
+from xml.etree.ElementTree import Element, SubElement
 
 from ..config import CommentConfig
 from ..epub.common import find_opf_path
 from ..epub.zip import Zip
-from ..llm.schema import CommentItem, CommentKind, CommentPosition
+from ..llm.schema import CommentKind, CommentPosition
 from ..xml import deduplicate_ids_in_element, find_first, iter_with_stack
 from ..xml.xml_like import XMLLikeNode
 from .extract import Chapter
