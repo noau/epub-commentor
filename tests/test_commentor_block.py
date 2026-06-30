@@ -20,7 +20,11 @@ from _mock_llm import MockLLM, json_dumps
 
 from epub_commentor.config import CommentConfig
 from epub_commentor.errors import CommentInvalidJSONError
-from epub_commentor.llm.block import annotate_block
+from epub_commentor.llm.block import (
+    _format_annotate_user,
+    _format_private_memo_context,
+    annotate_block,
+)
 from epub_commentor.llm.schema import (
     ChapterMemo,
     CommentKind,
@@ -171,3 +175,96 @@ class TestAnnotateBlock:
         # After annotate_block returns, data-p-id must be removed
         for p in chapter.body.iter("p"):
             assert "data-p-id" not in p.attrib
+
+
+class TestPrivateMemoContext:
+    """Unit tests for the Stage 2 private-memo-context renderer.
+
+    The three internal-hint fields (``motifs``, ``foreshadowing``,
+    ``interpretive_warnings``) were added so Stage 2 can carry private
+    working notes without cluttering the chapter-memo JSON visibly. The
+    formatter must surface only populated sections and the user-prompt
+    caller must compose the resulting block into the Stage 2 message.
+    """
+
+    def _memo(self, **hints) -> ChapterMemo:
+        return ChapterMemo(
+            core_thesis="x",
+            outline=["a", "b", "c"],
+            tone="t",
+            target_audience="g",
+            **hints,
+        )
+
+    def test_empty_memo_emits_empty_string(self) -> None:
+        out = _format_private_memo_context(self._memo())
+        assert out == ""
+
+    def test_only_motifs(self) -> None:
+        out = _format_private_memo_context(
+            self._memo(motifs=["bell appears 3x", "punch-clock as predator"])
+        )
+        assert "Internal context" in out
+        assert "never cite" in out
+        assert "Motifs to keep in mind" in out
+        assert "- bell appears 3x" in out
+        assert "- punch-clock as predator" in out
+        # Other sections absent
+        assert "Planted beats" not in out
+        assert "Common misreadings" not in out
+
+    def test_all_three_sections_present(self) -> None:
+        out = _format_private_memo_context(
+            self._memo(
+                motifs=["motif-1"],
+                foreshadowing=["foreshadow-1", "foreshadow-2"],
+                interpretive_warnings=["warn-1"],
+            )
+        )
+        assert "Motifs to keep in mind" in out
+        assert "Planted beats already in play" in out
+        assert "Common misreadings to avoid" in out
+
+    def test_items_capped_per_section(self) -> None:
+        """More than ``max_items_per_section`` items are truncated."""
+        out = _format_private_memo_context(
+            self._memo(motifs=[f"m{i}" for i in range(10)]),
+            max_items_per_section=3,
+        )
+        assert out.count("\n- ") == 3
+        assert "- m0" in out
+        assert "- m2" in out
+        assert "- m9" not in out
+
+    def test_full_user_message_contains_private_block(self) -> None:
+        """_format_annotate_user must inject the private context into the
+        user message that Stage 2 ultimately sees. The reader-facing memo
+        JSON is kept as well, but the private hints must also be visible."""
+        memo = self._memo(
+            motifs=["motif-X"],
+            foreshadowing=["foreshadow-X"],
+            interpretive_warnings=["warning-X"],
+        )
+        text = _format_annotate_user(
+            book_synopsis="(none)",
+            memo=memo,
+            block_index=0,
+            block_html="<p>p0</p>",
+        )
+        assert "Chapter memo:" in text  # public JSON still rendered
+        assert "Internal context" in text  # private block appended
+        assert "motif-X" in text
+        assert "foreshadow-X" in text
+        assert "warning-X" in text
+
+    def test_user_message_omits_private_block_when_empty(self) -> None:
+        """When all hint fields are empty, the user message must not gain
+        the 'Internal context' header — silence, not boilerplate."""
+        memo = self._memo()
+        text = _format_annotate_user(
+            book_synopsis="(none)",
+            memo=memo,
+            block_index=0,
+            block_html="<p>p0</p>",
+        )
+        assert "Internal context" not in text

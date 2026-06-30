@@ -49,6 +49,32 @@ def _annotate_seed(
     )
 
 
+def _format_private_memo_context(memo: ChapterMemo, max_items_per_section: int = 6) -> str:
+    """Render the three internal-hint fields as a private working note.
+
+    Stage 1 fills ``motifs``, ``foreshadowing`` and ``interpretive_warnings``
+    on a best-effort basis; each may be ``[]`` for chapters where nothing
+    qualifies. We surface only the populated ones, capped at
+    ``max_items_per_section`` to keep the user prompt readable.
+    """
+    sections: list[str] = []
+    if memo.motifs:
+        body = "\n".join(f"- {m}" for m in memo.motifs[:max_items_per_section])
+        sections.append(f"Motifs to keep in mind:\n{body}")
+    if memo.foreshadowing:
+        body = "\n".join(f"- {f}" for f in memo.foreshadowing[:max_items_per_section])
+        sections.append(f"Planted beats already in play:\n{body}")
+    if memo.interpretive_warnings:
+        body = "\n".join(f"- {w}" for w in memo.interpretive_warnings[:max_items_per_section])
+        sections.append(f"Common misreadings to avoid:\n{body}")
+    if not sections:
+        return ""
+    return (
+        "Internal context (private — never cite, never echo, "
+        "never say \"the memo says\"):\n\n" + "\n\n".join(sections)
+    )
+
+
 def _format_annotate_user(
     book_synopsis: str,
     memo: ChapterMemo,
@@ -56,9 +82,11 @@ def _format_annotate_user(
     block_html: str,
 ) -> str:
     memo_json = memo.model_dump_json(ensure_ascii=False, indent=2)
+    private_ctx = _format_private_memo_context(memo)
+    private_block = f"\n\n{private_ctx}" if private_ctx else ""
     return (
         f"Book synopsis:\n{book_synopsis}\n\n"
-        f"Chapter memo:\n```json\n{memo_json}\n```\n\n"
+        f"Chapter memo:\n```json\n{memo_json}\n```{private_block}\n\n"
         f"Block index: {block_index}\n"
         f'Block HTML (paragraphs are tagged data-p-id="0..N"):\n'
         f"```html\n{block_html}\n```"
