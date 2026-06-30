@@ -28,6 +28,8 @@ from .errors import CommentorError
 from .llm import LLM
 from .pipeline.extract import Chapter
 from .progress import make_default_progress_callback
+from .utils import normalize_whitespace
+from .xml import plain_text
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -170,6 +172,21 @@ def _resolve_format_json_path(source: Path, explicit: Path | None) -> Path:
     return Path("format.json").resolve()
 
 
+def _chapter_preview(chapter: Chapter, max_chars: int = 60) -> str:
+    """Render a short plain-text preview of the chapter body.
+
+    Walks the body element with :func:`plain_text` so that content
+    inside ``<div>`` / ``<section>`` / headings is captured too — not
+    only ``<p>``. Whitespace is collapsed and the result is truncated
+    to ``max_chars`` characters with an ellipsis when longer.
+    """
+    preview = normalize_whitespace(plain_text(chapter.body)).strip()
+
+    if len(preview) > max_chars:
+        preview = preview[: max_chars - 1].rstrip() + "…"
+    return preview
+
+
 def _load_llm(format_path: Path) -> LLM:
     """Read ``format.json`` and construct the production :class:`LLM`."""
     if not format_path.exists():
@@ -265,13 +282,16 @@ def _build_chapter_filter(args: argparse.Namespace) -> ChapterFilter | None:
                     + ("" if n_paragraphs[ch.path.as_posix()] > 0 else "  (empty — no <p>)")
                 ),
                 value=i,
+                description=_chapter_preview(ch),
                 checked=(n_paragraphs[ch.path.as_posix()] > 0),
             )
             for i, ch in enumerate(chapters)
         ]
         answer = questionary.checkbox(
-            "Select chapters to annotate (space=toggle, a=all, i=invert, enter=confirm):",
+            "Select chapters to annotate",
             choices=choices,
+            show_description=True,
+            instruction="(space=toggle, a=all, i=invert, enter=confirm)",
         ).ask()
         if answer is None:  # user pressed Ctrl-C
             print("aborted by user.", file=sys.stderr)
@@ -340,9 +360,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     config = _build_config(args)
 
-    # When interactive mode is on the questionary checkbox owns the terminal,
-    # so we must suppress the tqdm bars — they would otherwise fight for stdout.
-    progress_quiet = args.quiet or bool(getattr(args, "interactive", False))
+    progress_quiet = args.quiet
     progress_callback = make_default_progress_callback(quiet=progress_quiet)
 
     chapter_filter = _build_chapter_filter(args)

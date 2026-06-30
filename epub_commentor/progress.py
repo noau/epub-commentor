@@ -90,6 +90,7 @@ class TqdmProgressDisplay:
                     desc="Chapters",
                     position=0,
                     unit="ch",
+                    dynamic_ncols=True,
                 )
             self._chapter_bar.n = event.current
             label = (event.message or "").strip()[:40]
@@ -107,6 +108,8 @@ class TqdmProgressDisplay:
                     desc="Blocks",
                     position=1,
                     unit="blk",
+                    leave=False,
+                    dynamic_ncols=True,
                 )
                 self._block_total = event.total
             self._block_bar.n = event.current

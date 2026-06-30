@@ -32,7 +32,13 @@ import pytest
 from _mock_llm import MockLLM, json_dumps
 
 from epub_commentor import CommentorResult, comment_epub
-from epub_commentor.cli import _build_chapter_filter, _build_config, _build_parser, _resolve_format_json_path
+from epub_commentor.cli import (
+    _build_chapter_filter,
+    _build_config,
+    _build_parser,
+    _chapter_preview,
+    _resolve_format_json_path,
+)
 from epub_commentor.config import CommentConfig
 from epub_commentor.epub.zip import Zip
 from epub_commentor.llm.schema import ChapterMemo, CommentItem, CommentKind, CommentPosition
@@ -457,6 +463,33 @@ class TestBuildChapterFilter:
             assert mask == [True, False, True]
             assert mock_checkbox.called
 
+    def test_interactive_choices_carry_chapter_preview(self) -> None:
+        """Each ``questionary.Choice`` carries a ``description`` snippet from
+        the chapter body, so the picker can show real content under the
+        (sometimes fallback) title."""
+        ns = argparse.Namespace(interactive=True)
+        with (
+            mock.patch.object(sys.stdin, "isatty", return_value=True),
+            mock.patch("questionary.checkbox") as mock_checkbox,
+        ):
+            mock_checkbox.return_value.ask.return_value = [0]
+            cb = _build_chapter_filter(ns)
+            assert cb is not None
+            # Use the same stub content as `_mk_chapter_stub` ("p0", "p1", ...)
+            chapters = [_mk_chapter_stub(i) for i in range(3)]
+            cb(chapters)
+
+            # questionary.checkbox was called once with a `choices` kwarg.
+            assert mock_checkbox.called
+            _, kwargs = mock_checkbox.call_args
+            choices = kwargs["choices"]
+            assert len(choices) == 3
+            # Each non-empty chapter gets a non-empty description that
+            # mentions its paragraph text.
+            for i, choice in enumerate(choices):
+                assert choice.description is not None
+                assert f"p{i}" in choice.description
+
     def test_interactive_true_without_tty_exits(self) -> None:
         ns = argparse.Namespace(interactive=True)
         with mock.patch.object(sys.stdin, "isatty", return_value=False):
@@ -468,3 +501,80 @@ class TestBuildChapterFilter:
         parser = _build_parser()
         ns = parser.parse_args(["book.epub", "-i"])
         assert ns.interactive is True
+
+
+# ---------------------------------------------------------------------------
+# _chapter_preview (body-text snippet shown next to each interactive option)
+# ---------------------------------------------------------------------------
+
+
+def _mk_chapter_from_body(body_xml: str, title: str = "stub") -> Chapter:
+    """Build a Chapter whose body is parsed from a raw HTML/XML string."""
+    body = fromstring(body_xml).find("body")
+    assert body is not None
+    return Chapter(path=Path("stub.xhtml"), title=title, body=body, xml_node=None)
+
+
+class TestChapterPreview:
+    def test_concatenates_paragraphs_into_single_string(self) -> None:
+        # Real EPUB bodies interleave text with whitespace between
+        # elements (newlines / indentation in the source become
+        # element.tail), which ``plain_text`` captures and
+        # ``normalize_whitespace`` collapses to a single space.
+        ch = _mk_chapter_from_body(
+            "<html><body>\n  <p>Once upon a time</p>\n  <p>Second paragraph.</p>\n</body></html>"
+        )
+        assert _chapter_preview(ch) == "Once upon a time Second paragraph."
+
+    def test_includes_all_paragraphs_when_under_limit(self) -> None:
+        """No hard paragraph cap: short chapters include every paragraph."""
+        ch = _mk_chapter_from_body(
+            "<html><body>"
+            "<p>one</p><p>two</p><p>three</p><p>four</p><p>five</p>"
+            "</body></html>"
+        )
+        preview = _chapter_preview(ch)
+        for word in ("one", "two", "three", "four", "five"):
+            assert word in preview
+
+    def test_extracts_text_from_non_p_elements(self) -> None:
+        """``plain_text`` walks the whole tree, so content in ``<div>`` /
+        ``<h1>`` / ``<section>`` is captured — not just ``<p>``."""
+        ch = _mk_chapter_from_body(
+            "<html><body>"
+            "<h1>Chapter Title</h1>"
+            "<div>And then a long div with no paragraphs at all.</div>"
+            "</body></html>"
+        )
+        preview = _chapter_preview(ch)
+        assert "Chapter Title" in preview
+        assert "long div with no paragraphs" in preview
+
+    def test_wholly_empty_body_returns_empty_string(self) -> None:
+        ch = _mk_chapter_from_body("<html><body></body></html>")
+        assert _chapter_preview(ch) == ""
+
+    def test_whitespace_is_normalised(self) -> None:
+        ch = _mk_chapter_from_body(
+            "<html><body><p>line   one\n\nline\ttwo</p></body></html>"
+        )
+        # Multiple spaces / newlines / tabs collapse to a single space.
+        assert _chapter_preview(ch) == "line one line two"
+
+    def test_long_chapter_is_truncated_with_ellipsis(self) -> None:
+        long_text = "x" * 500
+        ch = _mk_chapter_from_body(f"<html><body><p>{long_text}</p></body></html>")
+        preview = _chapter_preview(ch, max_chars=50)
+        assert len(preview) <= 50
+        assert preview.endswith("…")
+
+    def test_custom_max_chars_respected(self) -> None:
+        ch = _mk_chapter_from_body("<html><body><p>abcdefghij klmnopqrst uvwxyz</p></body></html>")
+        preview = _chapter_preview(ch, max_chars=15)
+        assert preview.endswith("…")
+        assert len(preview) == 15
+
+    def test_short_text_not_truncated(self) -> None:
+        ch = _mk_chapter_from_body("<html><body><p>short.</p></body></html>")
+        # No ellipsis when text fits in the bound.
+        assert _chapter_preview(ch) == "short."
