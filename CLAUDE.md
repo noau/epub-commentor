@@ -92,7 +92,7 @@ poetry run pyright epub_commentor
 - 配置 / 数据类：`CommentConfig`、`CommentKind`、`CommentPosition`、`ChapterAnnotation`、`CommentorResult`
 - 顶层编排：`comment_epub(source, output, llm, config, progress_callback, chapter_filter) -> CommentorResult`（阶段汇报顺序：`extract` → `process` → `inject`；`chapter_filter` 可选，详见下文）
 - 进度回调：`ProgressCallback`（`Callable[[ProgressEvent], None]`）+ `ProgressEvent` dataclass + `make_default_progress_callback(quiet)` 工厂；CLI 默认装一个 `rich.progress.Progress` 渲染器，**单实例 + 两 TaskID** 垂直堆叠（chapter task 顶行 + block task 底行，每行独立 spinner + bar + M/N + ETA）
-- 章节过滤回调：`ChapterFilter`（`Callable[[list[Chapter]], list[bool]]`）— 返回与 spine 顺序等长的 bool mask，`True` 保留、`False` 跳过；CLI 在 `-i`/`--interactive` 下弹 questionary checkbox 多选
+- 章节过滤回调：`ChapterFilter`（`Callable[[list[Chapter]], list[bool]]`）— 返回与 spine 顺序等长的 bool mask，`True` 保留、`False` 跳过；CLI 在 `-i`/`--interactive` 下弹 rich-selector 多选（`↑/↓` 移动、`Space/Enter` 切换、`A/I/C` 全选/反选/清空，移动到 `[ Confirm ]` 后回车提交，`Esc/Q` 取消）
 - 提取 / 注入：`Chapter`、`extract_chapters`（pipeline 内）、`inject_annotations`（pipeline 内）
 - 异常：`CommentorError(ValueError)` + 五个子类（`CommentInvalidJSONError`、`CommentOrphanPIdError`、`CommentOverlapError`、`CommentScanFailedError`、`CommentNoParagraphsError`）
 
@@ -236,6 +236,6 @@ EPUB Commentor 把 AI 评注定位为**页边的陪伴者**，而不是居高临
 | M6 CLI | ✅ 完成 | `scripts/comment_epub.py` + `commentor.py` + `cli.py` + entrypoint |
 | M7a 进度条 + Debug 日志 | ✅ 完成 | `epub_commentor/progress.py` (`ProgressEvent` / `RichProgressDisplay` 单 Progress + 两 TaskID 堆叠，依赖 `rich.progress`) + `epub_commentor/llm/_debug_logger.py` + `[[CacheCheck]] / [[StageError]] / [[FinalError]]` 段 + `--log-dir` / `--debug` CLI 旗标 + `MockLLM(log_dir_path=...)` + `tests/test_commentor_log.py` |
 | M7b 真实 LLM 联调 | ⏳ 待实施 | 用 OpenAI 跑《The little prince》全本，验证样式、缓存、token 用量、Kindle 兼容性 |
-| M8 交互式章节选择 | ✅ 完成 | `ChapterFilter` callback (`Callable[[list[Chapter]], list[bool]]`) + `comment_epub(chapter_filter=...)` kwarg + `--interactive` / `-i` CLI 旗标（questionary checkbox，空章节默认不勾选，非 TTY 直接 `exit 2`）+ 进度条在 `-i` 下自动静默 |
+| M8 交互式章节选择 | ✅ 完成 | `ChapterFilter` callback (`Callable[[list[Chapter]], list[bool]]`) + `comment_epub(chapter_filter=...)` kwarg + `--interactive` / `-i` CLI 旗标（rich-selector 多选，空章节默认不勾选，非 TTY 直接 `exit 2`，`Esc/Q/Ctrl-C` → `exit 130`）+ 进度条在 `-i` 下自动静默 |
 
 详细 PRD 见 `plans/this-is-a-forked-encapsulated-seal.md`。

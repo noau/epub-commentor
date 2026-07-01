@@ -361,7 +361,7 @@ class TestCommentEpub:
         ``extract`` and ``inject`` are short enough that they print
         status lines to stderr directly; this decouples the progress
         renderer from any user interaction (e.g. ``chapter_filter``'s
-        questionary prompt) so rich and questionary never share
+        rich-selector picker) so rich and rich-selector never share
         terminal ownership.
         """
         asset = Path("tests/assets/The little prince.epub")
@@ -464,36 +464,36 @@ class TestBuildChapterFilter:
         ns = argparse.Namespace(interactive=True)
         with (
             mock.patch.object(sys.stdin, "isatty", return_value=True),
-            mock.patch("questionary.checkbox") as mock_checkbox,
+            mock.patch("rich_selector.Selection") as mock_selection,
         ):
-            mock_checkbox.return_value.ask.return_value = [0, 2]
+            mock_selection.return_value.run.return_value = [True, False, True]
             cb = _build_chapter_filter(ns)
             assert cb is not None and callable(cb)
             chapters = [_mk_chapter_stub(i) for i in range(3)]
             mask = cb(chapters)
             assert mask == [True, False, True]
-            assert mock_checkbox.called
+            assert mock_selection.called
 
     def test_interactive_choices_carry_chapter_preview(self) -> None:
-        """Each ``questionary.Choice`` carries a ``description`` snippet from
-        the chapter body, so the picker can show real content under the
-        (sometimes fallback) title."""
+        """Each ``Choice`` carries a ``description`` snippet from the chapter
+        body, so the picker can show real content under the (sometimes
+        fallback) title."""
         ns = argparse.Namespace(interactive=True)
         with (
             mock.patch.object(sys.stdin, "isatty", return_value=True),
-            mock.patch("questionary.checkbox") as mock_checkbox,
+            mock.patch("rich_selector.Selection") as mock_selection,
         ):
-            mock_checkbox.return_value.ask.return_value = [0]
+            mock_selection.return_value.run.return_value = [True, False, False]
             cb = _build_chapter_filter(ns)
             assert cb is not None
             # Use the same stub content as `_mk_chapter_stub` ("p0", "p1", ...)
             chapters = [_mk_chapter_stub(i) for i in range(3)]
             cb(chapters)
 
-            # questionary.checkbox was called once with a `choices` kwarg.
-            assert mock_checkbox.called
-            _, kwargs = mock_checkbox.call_args
-            choices = kwargs["choices"]
+            # rich_selector.Selection was called once with (header, choices).
+            assert mock_selection.called
+            args, _ = mock_selection.call_args
+            choices = args[1]
             assert len(choices) == 3
             # Each non-empty chapter gets a non-empty description that
             # mentions its paragraph text.
@@ -507,6 +507,42 @@ class TestBuildChapterFilter:
             with pytest.raises(SystemExit) as ei:
                 _build_chapter_filter(ns)
             assert ei.value.code == 2
+
+    def test_selection_cancelled_exits_130(self) -> None:
+        """Pressing Esc / Q inside the picker raises ``SelectionCancelled``;
+        we translate that to a SIGINT-style exit code so the parent shell
+        sees a clean abort rather than a traceback."""
+        from rich_selector import SelectionCancelled
+
+        ns = argparse.Namespace(interactive=True)
+        with (
+            mock.patch.object(sys.stdin, "isatty", return_value=True),
+            mock.patch("rich_selector.Selection") as mock_selection,
+        ):
+            mock_selection.return_value.run.side_effect = SelectionCancelled()
+            cb = _build_chapter_filter(ns)
+            assert cb is not None
+            chapters = [_mk_chapter_stub(i) for i in range(3)]
+            with pytest.raises(SystemExit) as ei:
+                cb(chapters)
+            assert ei.value.code == 130
+
+    def test_keyboard_interrupt_exits_130(self) -> None:
+        """Ctrl-C bubbles up as ``KeyboardInterrupt`` from ``readchar``; we
+        translate that to a SIGINT-style exit code so the parent shell sees
+        a clean abort rather than a traceback."""
+        ns = argparse.Namespace(interactive=True)
+        with (
+            mock.patch.object(sys.stdin, "isatty", return_value=True),
+            mock.patch("rich_selector.Selection") as mock_selection,
+        ):
+            mock_selection.return_value.run.side_effect = KeyboardInterrupt
+            cb = _build_chapter_filter(ns)
+            assert cb is not None
+            chapters = [_mk_chapter_stub(i) for i in range(3)]
+            with pytest.raises(SystemExit) as ei:
+                cb(chapters)
+            assert ei.value.code == 130
 
     def test_short_flag_alias_also_sets_interactive(self) -> None:
         parser = _build_parser()

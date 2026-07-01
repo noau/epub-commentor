@@ -181,7 +181,7 @@ result = comment_epub(
 
 若返回的 mask 不是等长的 `list[bool]`，`comment_epub` 会抛 `ValueError`（属程序员错误，而非可恢复的 `CommentorError`）。
 
-CLI 自带一个开箱即用的实现：`-i` / `--interactive` 弹 `questionary` checkbox 让用户在终端勾选章节。
+CLI 自带一个开箱即用的实现：`-i` / `--interactive` 弹 `rich-selector` 多选让用户在终端勾选章节。
 
 ### `CommentConfig`
 
@@ -240,9 +240,9 @@ poetry run epub-commentor SOURCE [-o OUTPUT] [--format-json PATH] [--synopsis TE
 poetry run epub-commentor path/to/source.epub --synopsis "..." -i
 ```
 
-EPUB 解析完毕后，会弹出 checkbox 列出所有章节：空格切换、`a` 全选、`i` 反选、回车确认。零 `<p>` 元素（封面、导航文档、纯图页）的章节默认不勾选——直接按回车就能一键跳过它们。
+EPUB 解析完毕后，会弹出多选列表展示所有章节：`↑/↓` 移动、空格或回车切换、`a` 全选、`i` 反选、`c` 清空，移到 `[ Confirm ]` 再回车提交（`esc` / `q` 取消）。零 `<p>` 元素（封面、导航文档、纯图页）的章节默认不勾选——直接提交就能一键跳过它们。
 
-`-i` 会自动抑制进度条（终端让给 questionary）。该旗标要求 stdin 是 TTY：通过管道输入时会以退出码 `2` 失败。
+`-i` 会自动抑制进度条（终端让给 rich-selector）。该旗标要求 stdin 是 TTY：通过管道输入时会以退出码 `2` 失败。
 
 ## 配置说明
 

@@ -147,8 +147,9 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "After extracting chapters, prompt interactively to choose which "
-            "chapters to annotate. Uses a terminal checkbox "
-            "(space=toggle, a=all, i=invert, enter=confirm). Requires a TTY."
+            "chapters to annotate. Uses a rich-selector multi-select "
+            "(↑/↓ move, Space/Enter toggle, A all, I invert, C clear, "
+            "Esc/Q cancel). Requires a TTY."
         ),
     )
     return parser
@@ -249,7 +250,8 @@ def _build_chapter_filter(args: argparse.Namespace) -> ChapterFilter | None:
 
     Returns ``None`` when the flag is absent — ``comment_epub`` treats that
     as identity (no chapters filtered). Otherwise returns a callable that
-    presents a questionary checkbox on stdin and yields a parallel bool mask.
+    presents a rich-selector multi-select on stdin and yields a parallel bool
+    mask aligned with the input chapters.
 
     Raises
     ------
@@ -268,39 +270,38 @@ def _build_chapter_filter(args: argparse.Namespace) -> ChapterFilter | None:
         )
         sys.exit(2)
 
-    import questionary  # local import; library stays import-clean if -i is unused
+    from rich_selector import (  # local import; library stays import-clean if -i is unused
+        Choice,
+        Selection,
+        SelectionCancelled,
+    )
 
     def _filter(chapters: list[Chapter]) -> list[bool]:
-        # Pre-deselect empty chapters so a user can press `enter` to skip
-        # them all at once. The library's own _process_chapter still guards
-        # against them defensively in case a callback ever drops the pre-deselect.
+        # Pre-deselect empty chapters so a user can move to `[ Confirm ]` and
+        # press Enter to skip them all at once. The library's own _process_chapter
+        # still guards against them defensively in case a callback ever drops
+        # the pre-deselect.
         n_paragraphs: dict[str, int] = {ch.path.as_posix(): sum(1 for _ in ch.body.iter("p")) for ch in chapters}
         choices = [
-            questionary.Choice(
+            Choice(
                 title=(
                     f"{i + 1:2d}. {ch.title[:60]}"
                     + ("" if n_paragraphs[ch.path.as_posix()] > 0 else "  (empty — no <p>)")
                 ),
-                value=i,
                 description=_chapter_preview(ch),
-                checked=(n_paragraphs[ch.path.as_posix()] > 0),
+                selected=(n_paragraphs[ch.path.as_posix()] > 0),
             )
             for i, ch in enumerate(chapters)
         ]
-        answer = questionary.checkbox(
-            "Select chapters to annotate",
-            choices=choices,
-            show_description=True,
-            instruction="(space=toggle, a=all, i=invert, enter=confirm)",
-        ).ask()
-        if answer is None:  # user pressed Ctrl-C
+        try:
+            # Selection.run() returns a `list[bool]` mask aligned with `choices`.
+            return Selection("Select chapters to annotate", choices).run()
+        except SelectionCancelled:  # user pressed Esc or Q
             print("aborted by user.", file=sys.stderr)
             sys.exit(130)
-
-        mask = [False] * len(chapters)
-        for value in answer:
-            mask[value] = True
-        return mask
+        except KeyboardInterrupt:  # user pressed Ctrl-C
+            print("aborted by user.", file=sys.stderr)
+            sys.exit(130)
 
     return _filter
 

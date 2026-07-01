@@ -181,7 +181,7 @@ Dropped chapters never reach the LLM stage — their bytes flow through the targ
 
 If the returned mask is not a `list[bool]` of matching length, `comment_epub` raises `ValueError` (a programmer error, not a recoverable `CommentorError`).
 
-The CLI ships a ready-made implementation: `-i` / `--interactive` opens a `questionary` checkbox so you can pick chapters at the terminal.
+The CLI ships a ready-made implementation: `-i` / `--interactive` opens a `rich-selector` multi-select so you can pick chapters at the terminal.
 
 ### `CommentConfig`
 
@@ -240,9 +240,9 @@ By default every chapter in the spine goes through the LLM pipeline. To choose i
 poetry run epub-commentor path/to/source.epub --synopsis "..." -i
 ```
 
-After the EPUB is parsed, a checkbox list of all chapters appears. Use `space` to toggle, `a` to select all, `i` to invert, `enter` to confirm. Chapters with zero `<p>` elements (cover pages, nav documents, image-only sections) are pre-deselected so a user can press `enter` to skip them all at once.
+After the EPUB is parsed, a checkbox list of all chapters appears. Use `↑/↓` to move, `space` or `enter` to toggle, `a` to select all, `i` to invert, `c` to clear, then move to `[ Confirm ]` and press `enter` to submit (`esc` / `q` to cancel). Chapters with zero `<p>` elements (cover pages, nav documents, image-only sections) are pre-deselected so a user can submit immediately to skip them all at once.
 
-When `-i` is set, the progress bar is automatically suppressed — questionary owns the terminal. The flag requires a TTY: piping the source through stdin exits with code `2`.
+When `-i` is set, the progress bar is automatically suppressed — rich-selector owns the terminal. The flag requires a TTY: piping the source through stdin exits with code `2`.
 
 ## Configuration
 

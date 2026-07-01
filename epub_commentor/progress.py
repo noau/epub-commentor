@@ -18,7 +18,7 @@ phase. The ``extract`` and ``inject`` stages are short enough that
 ``commentor.py`` prints single status lines to stderr directly; they
 do not flow through this callback. This keeps the progress renderer
 strictly after any user interaction (e.g. ``chapter_filter``'s
-questionary prompt), so rich and questionary never share terminal
+rich-selector picker), so rich and rich-selector never share terminal
 ownership.
 """
 
@@ -91,7 +91,7 @@ class RichProgressDisplay:
     scan`` event so that no rich terminal ownership happens before
     the pipeline's long-running stage. In particular, this lets
     ``comment_epub``'s optional ``chapter_filter`` (which may invoke
-    questionary) run with full terminal control before any rich
+    rich-selector) run with full terminal control before any rich
     rendering thread is alive. ``close()`` is idempotent. All event
     delivery happens on the main thread (see
     ``pipeline/process.py``'s ``as_completed`` loop) — ``Progress.update``

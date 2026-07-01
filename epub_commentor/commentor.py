@@ -143,7 +143,7 @@ def comment_epub(
         status lines to stderr directly; they do not flow through
         this callback. The first event fires after any
         ``chapter_filter`` has returned, so interactive filters
-        (e.g. questionary) never share terminal ownership with the
+        (e.g. rich-selector) never share terminal ownership with the
         progress renderer.
     chapter_filter:
         Optional :data:`~epub_commentor.pipeline.extract.ChapterFilter`
