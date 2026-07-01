@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import cast
 from xml.etree.ElementTree import fromstring
 
 import pytest
@@ -63,10 +64,18 @@ class TestFixAnchor:
         # (``min_length=1``), but we don't crash on it.
         assert _fix_anchor([], CommentPosition.BEFORE) == []
 
+    def test_unknown_position_raises(self) -> None:
+        # Exhaustive match on CommentPosition: feeding a value that
+        # isn't a known member (here, simulated via cast to bypass the
+        # enum's __init__ guard) must surface ValueError instead of
+        # silently falling through to the AFTER branch. This pins the
+        # behavior added by the P0-1 review.
+        fake = cast(CommentPosition, "around")
+        with pytest.raises(ValueError, match="Unexpected CommentPosition"):
+            _fix_anchor([0, 3], fake)
 
-def _comment(
-    pids: list[int], kind: CommentKind, position: CommentPosition, content: str = "x"
-) -> CommentItem:
+
+def _comment(pids: list[int], kind: CommentKind, position: CommentPosition, content: str = "x") -> CommentItem:
     return CommentItem(
         target_p_ids=pids,
         position=position,

@@ -33,6 +33,8 @@ caller should raise the original error as before.
 
 from __future__ import annotations
 
+from collections import defaultdict
+
 from .schema import BlockAnnotation, CommentItem, CommentKind, CommentPosition
 
 
@@ -45,12 +47,20 @@ def _fix_anchor(pids: list[int], position: CommentPosition) -> list[int]:
     the function is a no-op identity — it's safe to call
     unconditionally on every comment as long as the contiguity check
     has already been run elsewhere.
+
+    The match is exhaustive: any position value outside the known
+    :class:`CommentPosition` members raises :class:`ValueError` rather
+    than silently defaulting to an ``after`` anchor. This way, if a new
+    member is added later, callers will see the regression at the
+    first repair attempt instead of being misled by surprise behavior.
     """
     if not pids:
         return pids
     if position == CommentPosition.BEFORE:
         return [min(pids)]
-    return [max(pids)]
+    if position == CommentPosition.AFTER:
+        return [max(pids)]
+    raise ValueError(f"Unexpected CommentPosition: {position!r}")
 
 
 def salvage_block_annotations(
@@ -68,9 +78,17 @@ def salvage_block_annotations(
     contested p_id wins, the second (and later) same-kind overlap is
     dropped. Different kinds may still share p_ids, matching the
     strict validator's policy.
+
+    .. note::
+       Non-contiguous ranges are collapsed to a single anchor
+       paragraph (see :func:`_fix_anchor`). The resulting anchor may
+       collide with an already-claimed p_id of the same kind, causing
+       the comment to be dropped via step 3 even when the original
+       multi-paragraph range did not overlap with any prior claim.
+       First-claim-wins still applies after the collapse.
     """
     valid: list[CommentItem] = []
-    used: dict[CommentKind, set[int]] = {}
+    used: dict[CommentKind, set[int]] = defaultdict(set)
 
     for c in parsed.comments:
         if not c.target_p_ids:
@@ -81,14 +99,16 @@ def salvage_block_annotations(
             continue
 
         # 2. Contiguity: collapse non-contiguous ranges to an anchor.
+        # O(n) adjacency check — building the expected [a..b] list would
+        # blow up memory when p_id ranges are wide (no upper bound
+        # enforced at this layer).
         sorted_pids = sorted(c.target_p_ids)
-        expected = list(range(sorted_pids[0], sorted_pids[-1] + 1))
-        if sorted_pids != expected:
+        if len(sorted_pids) > 1 and any(sorted_pids[i] != sorted_pids[i - 1] + 1 for i in range(1, len(sorted_pids))):
             c.target_p_ids = _fix_anchor(c.target_p_ids, c.position)
             sorted_pids = c.target_p_ids  # now length 1
 
         # 3. Same-kind overlap: drop the second (and later) claim.
-        bucket = used.setdefault(c.kind, set())
+        bucket = used[c.kind]
         if any(p in bucket for p in c.target_p_ids):
             continue
         bucket.update(c.target_p_ids)
