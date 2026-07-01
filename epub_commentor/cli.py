@@ -17,9 +17,12 @@ a separate subcommand module so the main entry point stays greppable.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
+import os
 import sys
 from collections.abc import Sequence
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
 from rich.console import Console
@@ -28,12 +31,18 @@ from rich.table import Table
 
 from .commentor import ChapterFilter, CommentorResult, comment_epub
 from .config import CommentConfig
-from .errors import CommentorError
+from .errors import CommentAbortError, CommentorError
 from .llm import LLM
+from .llm.schema import CommentKind, CommentPosition
+from .pipeline import AnnotationFilter, ChapterAnnotation
 from .pipeline.extract import Chapter
 from .progress import make_default_progress_callback
 from .utils import normalize_whitespace
 from .xml import plain_text
+
+# Reused from commentor.py to detect placeholder memos for the review
+# picker's pre-deselect logic.
+_SKIPPED_PREFIX = "(chapter skipped"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -121,7 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--target-language",
         type=str,
         default=None,
-        help="Language the LLM should author commentary in (default: English).",
+        help="Language the LLM should author commentary in (default: Chinese).",
     )
     parser.add_argument(
         "--css-path",
@@ -140,6 +149,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Raise an error instead of skipping chapters with zero <p> elements.",
     )
     parser.add_argument(
+        "--fail-on-block-error",
+        action="store_true",
+        help=(
+            "Raise on Stage 1 scan / Stage 2 annotate retry exhaustion. "
+            "Default is to log a warning and skip the failed block / chapter."
+        ),
+    )
+    parser.add_argument(
+        "--skip-chapter-on-empty-annotation",
+        action="store_true",
+        help=(
+            "Mark a whole chapter as skipped (counted in chapters_skipped) "
+            "if any Stage 2 block fails or returns zero comments. Use this "
+            "together with --interactive on a follow-up run to retry only "
+            "the tainted chapters."
+        ),
+    )
+    parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
@@ -155,6 +182,27 @@ def _build_parser() -> argparse.ArgumentParser:
             "(↑/↓ move, Space/Enter toggle, A all, I invert, C clear, "
             "Esc/Q cancel). Requires a TTY."
         ),
+    )
+    review_group = parser.add_mutually_exclusive_group()
+    review_group.add_argument(
+        "--review",
+        action="store_true",
+        help=(
+            "After Stage 2 (annotation generation), always open an "
+            "interactive selector to choose which generated chapter "
+            "annotations to inject. By default the selector opens only "
+            "when at least one Stage 2 block was skipped or returned "
+            "empty, so clean runs stay zero-friction. Requires a TTY. "
+            "Unlike -i/--interactive (which selects chapters *before* "
+            "LLM processing), this selects annotations *after* "
+            "generation based on per-chapter stats (comments generated, "
+            "blocks skipped, empty blocks)."
+        ),
+    )
+    review_group.add_argument(
+        "--no-review",
+        action="store_true",
+        help=("Skip the annotation review selector entirely and inject every generated annotation unconditionally."),
     )
     return parser
 
@@ -192,34 +240,110 @@ def _chapter_preview(chapter: Chapter, max_chars: int = 60) -> str:
     return preview
 
 
-def _load_llm(format_path: Path) -> LLM:
-    """Read ``format.json`` and construct the production :class:`LLM`."""
+def _read_format_json(format_path: Path) -> dict:
+    """Read and parse ``format.json``, exiting with a clear message on failure."""
     if not format_path.exists():
         print(f"format.json not found at: {format_path}", file=sys.stderr)
         print("Copy format.template.json to format.json and fill in the API key.", file=sys.stderr)
         sys.exit(2)
 
     try:
-        cfg = json.loads(format_path.read_text(encoding="utf-8"))
+        return json.loads(format_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         print(f"format.json is not valid JSON ({format_path}): {exc}", file=sys.stderr)
         sys.exit(2)
 
+
+def _llm_param_names() -> set[str]:
+    """Names of keyword arguments :class:`LLM` accepts (minus ``self``)."""
+    return {name for name in inspect.signature(LLM.__init__).parameters if name != "self"}
+
+
+def _config_field_names() -> set[str]:
+    """Names of the :class:`CommentConfig` dataclass fields."""
+    return {f.name for f in dataclass_fields(CommentConfig)}
+
+
+def _coerce_config_value(name: str, value: object) -> object:
+    """Convert a JSON scalar into the type :class:`CommentConfig` expects.
+
+    JSON only carries strings / numbers / bools / lists, so a couple of
+    fields need lifting into their richer runtime types:
+
+    * ``css_path_in_epub`` — ``str`` → :class:`~pathlib.Path`
+    * ``position`` — ``str`` → :class:`CommentPosition`
+    * ``kinds`` — ``list[str]`` → ``tuple[CommentKind, ...]``
+
+    Every other field (ints, bools, plain strings) passes through as-is.
+    """
+    if value is None:
+        return value
+    if name == "css_path_in_epub" and isinstance(value, str):
+        return Path(value)
+    if name == "position" and isinstance(value, str):
+        return CommentPosition(value)
+    if name == "kinds" and isinstance(value, (list, tuple)):
+        return tuple(CommentKind(k) if isinstance(k, str) else k for k in value)
+    return value
+
+
+def _split_format_config(raw: dict) -> tuple[dict, dict, list[str]]:
+    """Route each ``format.json`` key to the object that owns it.
+
+    ``format.json`` may now hold three kinds of keys in one flat file:
+
+    1. **LLM credentials / runtime** — anything :class:`LLM` accepts
+       (``key``, ``url``, ``model``, ``token_encoding``, ``timeout``,
+       ``cache_path``, ``log_dir_path``, ...). These go to ``LLM(**cfg)``.
+    2. **Pipeline options** — anything :class:`CommentConfig` exposes
+       (``concurrency``, ``block_size``, ``target_language``,
+       ``position``, ``kinds``, ...). These become config defaults that
+       CLI flags can still override.
+    3. **Unknown** — anything else. Returned so the caller can warn
+       instead of crashing (a stray/misspelled key used to raise a
+       cryptic ``LLM.__init__() got an unexpected keyword argument``).
+
+    Returns
+    -------
+    tuple[dict, dict, list[str]]
+        ``(llm_kwargs, config_kwargs, unknown_keys)``.
+    """
+    llm_names = _llm_param_names()
+    config_names = _config_field_names()
+
+    llm_kwargs: dict = {}
+    config_kwargs: dict = {}
+    unknown: list[str] = []
+    for key, value in raw.items():
+        if key in llm_names:
+            llm_kwargs[key] = value
+        elif key in config_names:
+            config_kwargs[key] = _coerce_config_value(key, value)
+        else:
+            unknown.append(key)
+    return llm_kwargs, config_kwargs, unknown
+
+
+def _construct_llm(llm_kwargs: dict, format_path: Path) -> LLM:
+    """Build the production :class:`LLM` from the routed LLM kwargs."""
     try:
-        return LLM(**cfg)
+        return LLM(**llm_kwargs)
     except TypeError as exc:
-        # Unknown kwarg / missing required field — surface a clear error.
+        # A required field (key / url / model / token_encoding) is missing.
         print(f"failed to construct LLM from {format_path}: {exc}", file=sys.stderr)
         sys.exit(2)
 
 
-def _build_config(args: argparse.Namespace) -> CommentConfig:
+def _build_config(args: argparse.Namespace, base: dict | None = None) -> CommentConfig:
     """Translate parsed args into a :class:`CommentConfig`.
 
-    Each flag maps 1:1 onto a config field; ``None`` means "use the
-    config default", so we only override fields the user actually set.
+    ``base`` seeds the config with any pipeline options found in
+    ``format.json`` (see :func:`_split_format_config`). Command-line flags
+    are layered on top: each flag maps 1:1 onto a config field, and
+    ``None`` means "leave whatever ``base`` / the dataclass default
+    provides", so a flag only overrides a field the user actually set.
     """
-    overrides: dict = {}
+    overrides: dict = dict(base or {})
     if args.synopsis is not None:
         overrides["book_synopsis"] = args.synopsis
     if args.block_size is not None:
@@ -240,6 +364,10 @@ def _build_config(args: argparse.Namespace) -> CommentConfig:
         overrides["inject_css"] = False
     if args.fail_on_empty_chapter:
         overrides["fail_on_empty_chapter"] = True
+    if args.fail_on_block_error:
+        overrides["fail_on_block_error"] = True
+    if args.skip_chapter_on_empty_annotation:
+        overrides["skip_chapter_on_empty_annotation"] = True
 
     cfg = CommentConfig(**overrides)
 
@@ -302,11 +430,182 @@ def _build_chapter_filter(args: argparse.Namespace) -> ChapterFilter | None:
             mask = Selection("Select chapters to annotate", choices).run()
         except SelectionCancelled:  # user pressed Esc or Q
             print("aborted by user.", file=sys.stderr)
-            sys.exit(130)
+            # ``os._exit`` bypasses Python cleanup (atexit, finally, __del__)
+            # so the user sees the abort instantly instead of waiting for the
+            # Rich Live region + bg render thread (500ms join timeout) to
+            # unwind. Source EPUB is untouched; target ZIP may be partial —
+            # acceptable for a user-initiated abort.
+            os._exit(130)
         except KeyboardInterrupt:  # user pressed Ctrl-C
             print("aborted by user.", file=sys.stderr)
-            sys.exit(130)
+            os._exit(130)
         # Wipe the selector off the screen before the progress bar takes over.
+        _clear_console()
+        return mask
+
+    return _filter
+
+
+def _annotation_preview(ann: ChapterAnnotation, max_chars: int = 60) -> str:
+    """Render a short preview for the review picker's description column.
+
+    Prefers the first comment's text (since that's what the user just paid
+    LLM tokens for); falls back to the first ``<p>`` in the chapter body
+    for chapters with zero comments (so the picker still has something
+    readable under the row title).
+
+    Mirrors :func:`_chapter_preview`'s shape — plain-text snippet with
+    collapsed whitespace and ellipsis truncation — so the picker feels
+    visually consistent across the two selection gates.
+    """
+    if ann.comments:
+        snippet = normalize_whitespace(ann.comments[0].content).strip()
+        if snippet:
+            return snippet[: max_chars - 1].rstrip() + "…" if len(snippet) > max_chars else snippet
+    body = ann.chapter.body
+    first_p = next(iter(body.iter("p")), None)
+    if first_p is None:
+        return ""
+    snippet = normalize_whitespace(plain_text(first_p)).strip()
+    if not snippet:
+        return ""
+    return snippet[: max_chars - 1].rstrip() + "…" if len(snippet) > max_chars else snippet
+
+
+def _make_review_choice(index: int, ann: ChapterAnnotation):
+    """Build one :class:`rich_selector.Choice` row for the review picker.
+
+    Lock-off semantics
+    ------------------
+    Three rows states map onto the three lifecycle outcomes:
+
+    - **Locked off** (``disabled=True``): the chapter's
+      ``ChapterAnnotation.comments`` is empty AND the memo is *not* a
+      placeholder. There's literally nothing to inject, so the row
+      renders with a ``-`` indicator and the user cannot toggle it.
+      Mirrors how :func:`_build_chapter_filter` pre-deselects empty
+      chapters (cli.py:388-399) but goes one step further — the
+      annotation gate makes the empty-comments chapters structurally
+      untoggleable.
+    - **Selectable, pre-deselected** (``selected=False``): the memo
+      is the placeholder. The chapter failed Stage 1 (scan error) or
+      had zero ``<p>`` elements. There's nothing meaningful to inject,
+      but the user MAY want to keep the chapter in the mask anyway
+      (a no-op inject is harmless — CSS link still gets wired, IDs
+      still get deduplicated). The row is marked with a ``⚠`` prefix
+      so the user knows why it was pre-deselected.
+    - **Selectable, default selected** (``selected=True``): normal
+      case — Stage 2 generated at least one comment. The title
+      surfaces per-chapter stats so the user can scan-coverage at a
+      glance.
+
+    Title format: ``"<index>. <chapter title>  ·  💬 N comments · ⚠ K
+    block(s) skipped · ⚠ L empty block(s)"``. Stats are appended only
+    when non-zero so a fully-clean chapter shows just the title.
+    """
+    from rich_selector import Choice  # local import; see lazy-import note in _build_annotation_filter
+
+    title_prefix = f"{index + 1:2d}. "
+    placeholder = ann.memo.core_thesis.startswith(_SKIPPED_PREFIX)
+
+    if len(ann.comments) == 0 and not placeholder:
+        # Genuinely empty chapter — locked off.
+        return Choice(
+            title=f"{title_prefix}{ann.chapter.title[:50]}  🔒 no comments",
+            description=_annotation_preview(ann),
+            selected=False,
+            disabled=True,
+        )
+    if placeholder:
+        # Pipeline skip — pre-deselected but user can opt in for a no-op inject.
+        return Choice(
+            title=f"{title_prefix}{ann.chapter.title[:50]}  ⚠ scan failed / empty chapter",
+            description=_annotation_preview(ann),
+            selected=False,
+            disabled=False,
+        )
+    stats_bits = [f"💬 {len(ann.comments)} comments"]
+    if ann.skipped_blocks > 0:
+        stats_bits.append(f"⚠ {ann.skipped_blocks} block(s) skipped")
+    if ann.has_empty_blocks > 0:
+        stats_bits.append(f"⚠ {ann.has_empty_blocks} empty block(s)")
+    return Choice(
+        title=f"{title_prefix}{ann.chapter.title[:50]}  · " + " · ".join(stats_bits),
+        description=_annotation_preview(ann),
+        selected=True,
+        disabled=False,
+    )
+
+
+def _build_annotation_filter(args: argparse.Namespace) -> AnnotationFilter | None:
+    """Build the annotation-filter callback for ``--review`` / ``--no-review``.
+
+    Returns ``None`` when ``--no-review`` is set — :func:`comment_epub`
+    treats that as "inject every annotation unconditionally". Otherwise
+    returns a callable that opens a rich-selector multi-select on the
+    post-Stage-2 annotations and yields a parallel ``list[bool]`` mask.
+
+    Smart-trigger default
+    ---------------------
+    When ``--review`` is NOT set, the returned closure inspects the
+    annotations and short-circuits with an all-``True`` mask when
+    *nothing went wrong* — i.e. ``all(skipped_blocks == 0 and
+    has_empty_blocks == 0)``. That makes the picker a no-op on clean
+    runs while still surfacing whenever Stage 2 lost a block or got
+    back empty responses.
+
+    ``--review`` disables the smart trigger (always opens the picker)
+    so users can manually curate even when the pipeline ran perfectly.
+
+    TTY handling mirrors ``-i``:
+
+    - ``--review`` + non-TTY → :func:`sys.exit` with code 2 (the user
+      explicitly asked for the picker, so silently falling back would
+      surprise them).
+    - ``--no-review`` + non-TTY → returns ``None`` (graceful; the flag
+      already says "skip the picker").
+    - Default (no flags) + non-TTY → returns the closure; its smart
+      trigger returns ``[True]*N`` on clean runs and would otherwise
+      hit the TTY error inside ``Selection.run`` if anything went
+      wrong. Callers running in a non-TTY context are expected to
+      provide clean runs (or use ``--no-review``).
+    """
+    if getattr(args, "no_review", False):
+        return None
+
+    if getattr(args, "review", False) and not sys.stdin.isatty():
+        print(
+            "error: --review requires an interactive terminal (stdin is not a TTY).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    smart_trigger = not getattr(args, "review", False)
+
+    def _filter(annotations: list[ChapterAnnotation]) -> list[bool]:
+        # Lazy import keeps the public ``epub_commentor`` cli import-clean
+        # for users that never pass --review or --no-review. ``Choice`` is
+        # only used by ``_make_review_choice`` (which imports it locally);
+        # this closure only needs ``Selection`` and ``SelectionCancelled``.
+        from rich_selector import (  # type: ignore[import-not-found]
+            Selection,
+            SelectionCancelled,
+        )
+
+        if smart_trigger and not any(a.skipped_blocks > 0 or a.has_empty_blocks > 0 for a in annotations):
+            return [True] * len(annotations)
+
+        choices = [_make_review_choice(i, ann) for i, ann in enumerate(annotations)]
+        try:
+            mask = Selection("Select chapters to inject", choices).run()
+        except SelectionCancelled:
+            print("aborted by user.", file=sys.stderr)
+            # See _build_chapter_filter for why os._exit instead of sys.exit:
+            # Rich Live's bg render thread join alone costs ~500ms.
+            os._exit(130)
+        except KeyboardInterrupt:
+            print("aborted by user.", file=sys.stderr)
+            os._exit(130)
         _clear_console()
         return mask
 
@@ -334,6 +633,10 @@ def _print_summary(result: CommentorResult, source: Path) -> None:
     stats.add_row("output", str(result.output_path))
     stats.add_row("chapters processed", str(result.chapters_processed))
     stats.add_row("chapters skipped", str(result.chapters_skipped))
+    if result.chapters_filtered > 0:
+        stats.add_row("chapters filtered", str(result.chapters_filtered))
+    if result.blocks_skipped > 0:
+        stats.add_row("blocks skipped", str(result.blocks_skipped))
     stats.add_row("comments generated", str(result.total_comments))
     stats.add_row("input tokens", str(result.input_tokens))
     stats.add_row("input cache tokens", str(result.input_cache_tokens))
@@ -366,38 +669,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     format_path = _resolve_format_json_path(args.source, args.format_json)
-    llm = _load_llm(format_path)
+    raw_cfg = _read_format_json(format_path)
 
-    # cache_path and log_dir_path are forwarded to LLM directly (they
-    # control where cache / debug log files land). They can't be set on
-    # CommentConfig because the config is supposed to be LLM-agnostic.
-    cfg_overrides: dict[str, object] = {}
+    # A single flat format.json can now hold LLM credentials AND pipeline
+    # options. Route each key to its owner; warn (don't crash) on strays.
+    llm_kwargs, config_from_json, unknown_keys = _split_format_config(raw_cfg)
+    if unknown_keys:
+        print(
+            f"warning: ignoring unrecognised key(s) in {format_path.name}: {', '.join(sorted(unknown_keys))}",
+            file=sys.stderr,
+        )
+
+    # cache_path and log_dir_path steer where the LLM writes cache / debug
+    # log files. CLI flags win over whatever format.json declared.
     if args.cache_path is not None:
-        cfg_overrides["cache_path"] = str(args.cache_path.resolve())
+        llm_kwargs["cache_path"] = str(args.cache_path.resolve())
     log_dir: Path | None = args.log_dir
     if args.debug and log_dir is None:
         log_dir = Path("temp/logs")
     if log_dir is not None:
-        # Note: `--debug` is purely a CLI shorthand for `log_dir_path`;
-        # the actual per-request debug logging is gated by `log_dir_path`
-        # inside `LLM`. We deliberately do NOT inject a `debug` key into
-        # `cfg_overrides` — `LLM.__init__` accepts the field from
-        # `format.json` as a no-op for backward compatibility, but here we
-        # trust the on-disk value rather than overwrite it from the CLI.
-        cfg_overrides["log_dir_path"] = str(log_dir.resolve())
-    if cfg_overrides:
-        # LLM doesn't accept post-construction rewrites of these paths;
-        # we'd need to rebuild it. For simplicity we re-instantiate.
-        cfg_dict = json.loads(format_path.read_text(encoding="utf-8"))
-        cfg_dict.update(cfg_overrides)
-        llm = LLM(**cfg_dict)
+        llm_kwargs["log_dir_path"] = str(log_dir.resolve())
 
-    config = _build_config(args)
+    llm = _construct_llm(llm_kwargs, format_path)
+
+    # Pipeline options: format.json values seed the config, CLI flags override.
+    config = _build_config(args, base=config_from_json)
 
     progress_quiet = args.quiet
     progress_callback = make_default_progress_callback(quiet=progress_quiet)
 
     chapter_filter = _build_chapter_filter(args)
+    annotation_filter = _build_annotation_filter(args)
 
     try:
         try:
@@ -408,10 +710,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config=config,
                 progress_callback=progress_callback,
                 chapter_filter=chapter_filter,
+                annotation_filter=annotation_filter,
             )
         except CommentorError as exc:
             print(f"commentor failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
+        except CommentAbortError:
+            # The two-stage SIGINT handler (epub_commentor.llm._abort)
+            # already printed "aborting..." to stderr. A second Ctrl-C
+            # would hard-exit the process via os._exit(130) inside the
+            # handler, so reaching this branch always means a clean
+            # cooperative abort.
+            print("aborted by user.", file=sys.stderr)
+            return 130
     finally:
         # rich Progress context must be exited explicitly; _NoOpDisplay.close() is a no-op.
         # __self__ access works at runtime (callbacks are bound methods); pyright sees

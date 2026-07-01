@@ -16,7 +16,7 @@ Schema (return ONLY this object, no markdown, no prose):
       "target_p_ids": [int, ...],      // contiguous subset of 0..{{ block_size - 1 }}
       "position": "before" | "after",  // relative to LAST target_p
       "kind": "intro" | "summary" | "note",
-      "content": "1-3 crisp sentences in {{ target_language }}"
+      "content": "1-2 crisp sentences in {{ target_language }}"
     }
   ]
 }
@@ -30,7 +30,7 @@ CRITICAL PROCESS RULES (Obey strictly):
 
 2. **Target Handling**:
    - `target_p_ids` must always be a contiguous integer interval (e.g., [1,2] valid; [0,2] invalid).
-   - If multiple annotations target the exact same paragraph range, merge their insights into a single `content` string. Never repeat or overlap `target_p_ids` across different items in the array.
+   - Comments of the **same** `kind` MUST NOT overlap in `target_p_ids` (e.g. two `intro` boxes on the same span is forbidden). Comments of **different** kinds MAY share `target_p_ids` — this is the canonical "an `intro` frames the section while a `note` does close reading on a paragraph inside it" pattern, and the three voices are designed to be juxtaposed rather than nested.
 
 3. **The Chapter Memo is Private Context**:
    Never cite, name, or echo the phrases of the `chapter_memo` (no "as the memo notes"). Let it quietly inform your structural awareness and your sense of accumulating threads.
@@ -52,7 +52,7 @@ CRITICAL PROCESS RULES (Obey strictly):
      Not every note must flash. Some may simply gloss a term or signal a half-formed hunch — the margin can hold quiet marks too.
 
 5. **Length, Density, and Calibration**:
-   - Keep each annotation between 1 and 3 sentences. Prefer brevity; phrase-level punchiness is better than essayistic explanation.
+   - Keep each annotation between 1 and 2 sentences. Prefer brevity; phrase-level punchiness is better than essayistic explanation.
    - Aim for a block to feel *companioned, not decorated*. A good default for most substantial blocks is to spread one intro, one summary, and one note across the span — but only where the text earns them.
    - Return `{"comments": []}` only when the block is genuinely weightless and nothing merits even a brief pause. This should be rare.
    - Do NOT reproduce full sentences verbatim from the source. Brief single-word echoes in scare-quotes (like "'shriek'") are welcome when they let the reader feel the texture; longer quotations are not.

@@ -76,7 +76,7 @@ class TestEndToEndPipeline:
             }
         )
         config = CommentConfig(block_size=20)
-        annotations = process_chapters(target, book_metadata=metadata, llm=llm, config=config)
+        annotations, _ = process_chapters(target, book_metadata=metadata, llm=llm, config=config)
         assert len(annotations) == 2
         for ann in annotations:
             assert ann.memo.core_thesis == "test memo"

@@ -56,7 +56,24 @@ class CommentNoParagraphsError(CommentorError):
     """A chapter contains zero ``<p>`` elements and cannot be annotated."""
 
 
+class CommentAbortError(KeyboardInterrupt):
+    """The user pressed Ctrl-C during the pipeline.
+
+    Inherits from :class:`KeyboardInterrupt` (not :class:`CommentorError`)
+    on purpose: the CLI's outer ``except CommentorError`` reports failures
+    with exit code 1 and a stack trace, but an abort should produce a
+    clean exit code 130 with no traceback. The CLI catches this in a
+    dedicated ``except`` clause and returns 130.
+
+    Raised cooperatively by :mod:`epub_commentor.llm._abort`,
+    :mod:`epub_commentor.llm.executor`, and
+    :mod:`epub_commentor.llm.context` once the SIGINT handler has set
+    the abort flag.
+    """
+
+
 __all__ = [
+    "CommentAbortError",
     "CommentInvalidJSONError",
     "CommentNoParagraphsError",
     "CommentOverlapError",

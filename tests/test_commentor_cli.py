@@ -33,15 +33,18 @@ from _mock_llm import MockLLM, json_dumps
 
 from epub_commentor import CommentorResult, comment_epub
 from epub_commentor.cli import (
+    _build_annotation_filter,
     _build_chapter_filter,
     _build_config,
     _build_parser,
     _chapter_preview,
+    _make_review_choice,
     _resolve_format_json_path,
 )
 from epub_commentor.config import CommentConfig
 from epub_commentor.epub.zip import Zip
 from epub_commentor.llm.schema import ChapterMemo, CommentItem, CommentKind, CommentPosition
+from epub_commentor.pipeline import ChapterAnnotation
 from epub_commentor.pipeline.extract import Chapter, extract_chapters
 from epub_commentor.progress import ProgressEvent
 
@@ -63,6 +66,8 @@ class TestBuildConfig:
             css_path=None,
             no_css=False,
             fail_on_empty_chapter=False,
+            fail_on_block_error=False,
+            skip_chapter_on_empty_annotation=False,
             log_dir=None,
             debug=False,
         )
@@ -72,6 +77,8 @@ class TestBuildConfig:
         assert cfg.concurrency == 4
         assert cfg.inject_css is True
         assert cfg.fail_on_empty_chapter is False
+        assert cfg.fail_on_block_error is False
+        assert cfg.skip_chapter_on_empty_annotation is False
 
     def test_all_overrides_applied(self) -> None:
         ns = argparse.Namespace(
@@ -85,6 +92,8 @@ class TestBuildConfig:
             css_path=Path("custom/style.css"),
             no_css=True,
             fail_on_empty_chapter=True,
+            fail_on_block_error=True,
+            skip_chapter_on_empty_annotation=True,
             log_dir=Path("logs"),
             debug=True,
         )
@@ -99,6 +108,8 @@ class TestBuildConfig:
         assert cfg.css_path_in_epub == Path("custom/style.css")
         assert cfg.inject_css is False
         assert cfg.fail_on_empty_chapter is True
+        assert cfg.fail_on_block_error is True
+        assert cfg.skip_chapter_on_empty_annotation is True
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +158,11 @@ class TestArgparseParser:
                 "Styles/x.css",
                 "--no-css",
                 "--fail-on-empty-chapter",
+                "--fail-on-block-error",
+                "--skip-chapter-on-empty-annotation",
                 "--quiet",
                 "--interactive",
+                "--review",
             ]
         )
         assert ns.source == Path("book.epub")
@@ -167,8 +181,24 @@ class TestArgparseParser:
         assert ns.css_path == Path("Styles/x.css")
         assert ns.no_css is True
         assert ns.fail_on_empty_chapter is True
+        assert ns.fail_on_block_error is True
+        assert ns.skip_chapter_on_empty_annotation is True
         assert ns.quiet is True
         assert ns.interactive is True
+        assert ns.review is True
+        assert ns.no_review is False
+
+    def test_no_review_flag_accepted(self) -> None:
+        parser = _build_parser()
+        ns = parser.parse_args(["book.epub", "--no-review"])
+        assert ns.review is False
+        assert ns.no_review is True
+
+    def test_review_and_no_review_are_mutex(self) -> None:
+        """Argparse rejects both flags together with a clean error."""
+        parser = _build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["book.epub", "--review", "--no-review"])
 
     def test_missing_source_errors(self, capsys: pytest.CaptureFixture[str]) -> None:
         parser = _build_parser()
@@ -394,9 +424,13 @@ class TestCommentEpub:
         assert "extract" not in stages
         assert "inject" not in stages
         assert "process" in stages
-        # Every emitted event must be a process-stage event with a substage
-        # in {scan, annotate} — the decoupled renderer rejects any other shape.
-        assert all(e.substage in ("scan", "annotate") for e in events)
+        # Every process-stage event must carry a substage in {scan, annotate}
+        # — the decoupled renderer rejects any other shape. ``stage="warn"``
+        # events (soft-skip notifications, emitted by the new
+        # fail_on_block_error / skip_chapter_on_empty_annotation paths)
+        # are a separate channel and intentionally have substage=None.
+        process_events = [e for e in events if e.stage == "process"]
+        assert all(e.substage in ("scan", "annotate") for e in process_events)
 
     def test_progress_callback_exception_does_not_crash(self, tmp_path: Path) -> None:
         asset = Path("tests/assets/The little prince.epub")
@@ -510,14 +544,16 @@ class TestBuildChapterFilter:
 
     def test_selection_cancelled_exits_130(self) -> None:
         """Pressing Esc / Q inside the picker raises ``SelectionCancelled``;
-        we translate that to a SIGINT-style exit code so the parent shell
-        sees a clean abort rather than a traceback."""
+        we translate that to ``os._exit(130)`` so the parent shell sees a
+        clean abort instantly, without waiting for Rich's bg render thread
+        to join or the Live region to unwind."""
         from rich_selector import SelectionCancelled
 
         ns = argparse.Namespace(interactive=True)
         with (
             mock.patch.object(sys.stdin, "isatty", return_value=True),
             mock.patch("rich_selector.Selection") as mock_selection,
+            mock.patch("os._exit", side_effect=SystemExit(130)) as mock_exit,
         ):
             mock_selection.return_value.run.side_effect = SelectionCancelled()
             cb = _build_chapter_filter(ns)
@@ -526,15 +562,17 @@ class TestBuildChapterFilter:
             with pytest.raises(SystemExit) as ei:
                 cb(chapters)
             assert ei.value.code == 130
+            mock_exit.assert_called_once_with(130)
 
     def test_keyboard_interrupt_exits_130(self) -> None:
         """Ctrl-C bubbles up as ``KeyboardInterrupt`` from ``readchar``; we
-        translate that to a SIGINT-style exit code so the parent shell sees
-        a clean abort rather than a traceback."""
+        translate that to ``os._exit(130)`` for the same instant-abort
+        reason as Esc / Q above."""
         ns = argparse.Namespace(interactive=True)
         with (
             mock.patch.object(sys.stdin, "isatty", return_value=True),
             mock.patch("rich_selector.Selection") as mock_selection,
+            mock.patch("os._exit", side_effect=SystemExit(130)) as mock_exit,
         ):
             mock_selection.return_value.run.side_effect = KeyboardInterrupt
             cb = _build_chapter_filter(ns)
@@ -543,11 +581,257 @@ class TestBuildChapterFilter:
             with pytest.raises(SystemExit) as ei:
                 cb(chapters)
             assert ei.value.code == 130
+            mock_exit.assert_called_once_with(130)
 
     def test_short_flag_alias_also_sets_interactive(self) -> None:
         parser = _build_parser()
         ns = parser.parse_args(["book.epub", "-i"])
         assert ns.interactive is True
+
+
+# ---------------------------------------------------------------------------
+# _build_annotation_filter (post-process annotation-picker)
+# ---------------------------------------------------------------------------
+
+
+def _mk_annotation_stub(
+    i: int,
+    *,
+    comments: list[CommentItem] | None = None,
+    skipped_blocks: int = 0,
+    has_empty_blocks: int = 0,
+    placeholder: bool = False,
+) -> ChapterAnnotation:
+    """Build a ChapterAnnotation stub for testing the review picker.
+
+    ``placeholder=True`` swaps the memo's ``core_thesis`` for the
+    ``(chapter skipped`` prefix that :func:`_is_chapter_skipped` checks
+    for — the signal the picker uses to detect pipeline-internal skips
+    that should be pre-deselected but stay selectable.
+    """
+    chapter = _mk_chapter_stub(i)
+    if placeholder:
+        memo = ChapterMemo(
+            core_thesis="(chapter skipped — no <p> elements)",
+            outline=["(skipped)", "(skipped)", "(skipped)"],
+            tone="(unknown)",
+            target_audience="(unknown)",
+        )
+    else:
+        memo = ChapterMemo(
+            core_thesis=f"thesis {i}",
+            outline=["a", "b", "c"],
+            tone="t",
+            target_audience="g",
+        )
+    return ChapterAnnotation(
+        chapter=chapter,
+        memo=memo,
+        comments=comments or [],
+        skipped_blocks=skipped_blocks,
+        has_empty_blocks=has_empty_blocks,
+    )
+
+
+class TestBuildAnnotationFilter:
+    """Factory + per-row Choice construction for the post-process review picker."""
+
+    def test_no_review_returns_none(self) -> None:
+        """``--no-review`` is the explicit "skip the gate" signal; the
+        factory returns ``None`` regardless of TTY."""
+        ns = argparse.Namespace(review=False, no_review=True)
+        assert _build_annotation_filter(ns) is None
+
+    def test_default_args_returns_callable(self) -> None:
+        """Without either flag, the factory still returns a callable —
+        the closure's smart-trigger logic decides whether to open the
+        picker at runtime."""
+        ns = argparse.Namespace(review=False, no_review=False)
+        with mock.patch.object(sys.stdin, "isatty", return_value=True):
+            cb = _build_annotation_filter(ns)
+            assert cb is not None and callable(cb)
+
+    def test_review_returns_callable(self) -> None:
+        ns = argparse.Namespace(review=True, no_review=False)
+        with mock.patch.object(sys.stdin, "isatty", return_value=True):
+            cb = _build_annotation_filter(ns)
+            assert cb is not None and callable(cb)
+
+    def test_review_no_tty_exits_2(self) -> None:
+        """``--review`` is an explicit opt-in; silently falling back to
+        "inject all" on a non-TTY would surprise the user. Mirror
+        ``-i``'s behaviour: ``sys.exit(2)``."""
+        ns = argparse.Namespace(review=True, no_review=False)
+        with mock.patch.object(sys.stdin, "isatty", return_value=False):
+            with pytest.raises(SystemExit) as ei:
+                _build_annotation_filter(ns)
+            assert ei.value.code == 2
+
+    def test_no_review_no_tty_returns_none(self) -> None:
+        """``--no-review`` + non-TTY is graceful — return ``None``."""
+        ns = argparse.Namespace(review=False, no_review=True)
+        assert _build_annotation_filter(ns) is None
+
+    def test_smart_trigger_short_circuits_clean_run(self) -> None:
+        """Default-mode filter returns ``[True]*N`` when no chapter had
+        skips or empty blocks — the picker is bypassed."""
+        ns = argparse.Namespace(review=False, no_review=False)
+        with mock.patch.object(sys.stdin, "isatty", return_value=True):
+            cb = _build_annotation_filter(ns)
+            assert cb is not None
+            annotations = [_mk_annotation_stub(i) for i in range(3)]
+            # No skips, no empty → no picker call, mask is all-True.
+            mask = cb(annotations)
+            assert mask == [True, True, True]
+
+    def test_smart_trigger_fires_on_skipped_blocks(self) -> None:
+        ns = argparse.Namespace(review=False, no_review=False)
+        with (
+            mock.patch.object(sys.stdin, "isatty", return_value=True),
+            mock.patch("rich_selector.Selection") as mock_selection,
+        ):
+            mock_selection.return_value.run.return_value = [True, True, True]
+            cb = _build_annotation_filter(ns)
+            assert cb is not None
+            annotations = [
+                _mk_annotation_stub(0, skipped_blocks=2),
+                _mk_annotation_stub(1),
+                _mk_annotation_stub(2),
+            ]
+            cb(annotations)
+            assert mock_selection.called
+
+    def test_smart_trigger_fires_on_empty_blocks(self) -> None:
+        ns = argparse.Namespace(review=False, no_review=False)
+        with (
+            mock.patch.object(sys.stdin, "isatty", return_value=True),
+            mock.patch("rich_selector.Selection") as mock_selection,
+        ):
+            mock_selection.return_value.run.return_value = [True]
+            cb = _build_annotation_filter(ns)
+            assert cb is not None
+            annotations = [_mk_annotation_stub(0, has_empty_blocks=1)]
+            cb(annotations)
+            assert mock_selection.called
+
+    def test_force_review_always_opens_picker(self) -> None:
+        """``--review`` disables smart trigger — even a clean run opens the picker."""
+        ns = argparse.Namespace(review=True, no_review=False)
+        with (
+            mock.patch.object(sys.stdin, "isatty", return_value=True),
+            mock.patch("rich_selector.Selection") as mock_selection,
+        ):
+            mock_selection.return_value.run.return_value = [True]
+            cb = _build_annotation_filter(ns)
+            assert cb is not None
+            annotations = [_mk_annotation_stub(0)]  # no skips, no empty
+            cb(annotations)
+            assert mock_selection.called
+
+    def test_selection_cancelled_exits_130(self) -> None:
+        from rich_selector import SelectionCancelled
+
+        ns = argparse.Namespace(review=True, no_review=False)
+        with (
+            mock.patch.object(sys.stdin, "isatty", return_value=True),
+            mock.patch("rich_selector.Selection") as mock_selection,
+            mock.patch("os._exit", side_effect=SystemExit(130)) as mock_exit,
+        ):
+            mock_selection.return_value.run.side_effect = SelectionCancelled()
+            cb = _build_annotation_filter(ns)
+            assert cb is not None
+            with pytest.raises(SystemExit) as ei:
+                cb([_mk_annotation_stub(0, skipped_blocks=1)])
+            assert ei.value.code == 130
+            mock_exit.assert_called_once_with(130)
+
+    def test_keyboard_interrupt_exits_130(self) -> None:
+        ns = argparse.Namespace(review=True, no_review=False)
+        with (
+            mock.patch.object(sys.stdin, "isatty", return_value=True),
+            mock.patch("rich_selector.Selection") as mock_selection,
+            mock.patch("os._exit", side_effect=SystemExit(130)) as mock_exit,
+        ):
+            mock_selection.return_value.run.side_effect = KeyboardInterrupt
+            cb = _build_annotation_filter(ns)
+            assert cb is not None
+            with pytest.raises(SystemExit) as ei:
+                cb([_mk_annotation_stub(0, skipped_blocks=1)])
+            assert ei.value.code == 130
+            mock_exit.assert_called_once_with(130)
+
+
+class TestMakeReviewChoice:
+    """Per-row :class:`Choice` construction — locks, pre-deselects, stats.
+
+    Three lifecycle outcomes drive the row layout:
+
+    - Locked off (no comments, real memo): ``disabled=True``
+    - Pre-deselected (placeholder memo): ``selected=False, disabled=False``
+    - Default selected (normal): ``selected=True``
+    """
+
+    def test_empty_comments_locked_off(self) -> None:
+        ann = _mk_annotation_stub(0, comments=[])  # real memo, no comments
+        choice = _make_review_choice(0, ann)
+        assert choice.disabled is True
+        assert choice.selected is False
+        assert "🔒" in (choice.title or "")
+
+    def test_placeholder_memo_pre_deselected(self) -> None:
+        ann = _mk_annotation_stub(0, comments=[], placeholder=True)
+        choice = _make_review_choice(0, ann)
+        assert choice.disabled is False  # user CAN toggle (pre-deselected, not locked)
+        assert choice.selected is False
+        assert "⚠" in (choice.title or "")
+
+    def test_normal_annotation_selected_with_stats(self) -> None:
+        ann = _mk_annotation_stub(
+            0,
+            comments=[
+                CommentItem(target_p_ids=[0], position=CommentPosition.BEFORE, kind=CommentKind.NOTE, content="x"),
+                CommentItem(target_p_ids=[1], position=CommentPosition.AFTER, kind=CommentKind.INTRO, content="y"),
+            ],
+            skipped_blocks=1,
+            has_empty_blocks=2,
+        )
+        choice = _make_review_choice(0, ann)
+        assert choice.disabled is False
+        assert choice.selected is True
+        assert "💬 2 comments" in (choice.title or "")
+        assert "1 block(s) skipped" in (choice.title or "")
+        assert "2 empty block(s)" in (choice.title or "")
+
+    def test_normal_annotation_omits_zero_stats(self) -> None:
+        ann = _mk_annotation_stub(
+            0,
+            comments=[
+                CommentItem(target_p_ids=[0], position=CommentPosition.BEFORE, kind=CommentKind.NOTE, content="x"),
+            ],
+        )
+        choice = _make_review_choice(0, ann)
+        # No skipped/empty blocks → those segments are omitted.
+        assert "skipped" not in (choice.title or "")
+        assert "empty block" not in (choice.title or "")
+
+    def test_choice_description_carries_preview(self) -> None:
+        """The picker's description column should expose some
+        human-readable preview text so the user can identify the
+        chapter."""
+        ann = _mk_annotation_stub(
+            0,
+            comments=[
+                CommentItem(
+                    target_p_ids=[0],
+                    position=CommentPosition.BEFORE,
+                    kind=CommentKind.NOTE,
+                    content="A first annotation that previews the chapter for the user.",
+                )
+            ],
+        )
+        choice = _make_review_choice(0, ann)
+        assert choice.description
+        assert "first annotation" in choice.description
 
 
 # ---------------------------------------------------------------------------

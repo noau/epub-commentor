@@ -115,6 +115,36 @@ class TestValidateBlockAnnotationsEdgeCases:
         with pytest.raises(CommentOverlapError):
             validate_block_annotations(ann, block_size=4)
 
+    def test_cross_kind_overlap_is_allowed(self) -> None:
+        """Different kinds may share p_ids — the canonical 古书夹注
+        pattern: an ``intro`` frames a section while a ``note`` does
+        close reading on a paragraph inside it."""
+        ann = BlockAnnotation(
+            comments=[
+                _mk([0, 1], kind=CommentKind.INTRO),
+                _mk([1], kind=CommentKind.NOTE),
+            ],
+        )
+        out = validate_block_annotations(ann, block_size=4)
+        assert len(out) == 2
+        assert out[0].kind == CommentKind.INTRO
+        assert out[1].kind == CommentKind.NOTE
+        # p_id 1 sits in both — this is the intended overlap
+        assert 1 in out[0].target_p_ids
+        assert out[1].target_p_ids == [1]
+
+    def test_same_kind_overlap_still_raises_after_cross_kind_relaxation(self) -> None:
+        """Sanity guard: the cross-kind relaxation must not weaken the
+        same-kind rule. Two ``note`` comments sharing a p_id still raise."""
+        ann = BlockAnnotation(
+            comments=[
+                _mk([0, 1], kind=CommentKind.NOTE),
+                _mk([1, 2], kind=CommentKind.NOTE),
+            ],
+        )
+        with pytest.raises(CommentOverlapError):
+            validate_block_annotations(ann, block_size=4)
+
     def test_negative_pid_raises(self) -> None:
         ann = BlockAnnotation(comments=[_mk([-1, 0])])
         with pytest.raises(CommentOrphanPIdError):

@@ -105,12 +105,18 @@ def validate_block_annotations(ann: BlockAnnotation, block_size: int) -> list[Co
 
     1. Every ``target_p_ids`` value is in ``[0, block_size)``.
     2. ``target_p_ids`` is a contiguous integer range (e.g. ``[3, 4, 5]``).
-    3. No two comments in the same block overlap.
+    3. No two comments of the **same** ``kind`` overlap. Comments of
+       *different* kinds are allowed to share ``target_p_ids`` — this is
+       the canonical "古书夹注" pattern: an ``intro`` framing a section
+       while a ``note`` does close reading on a paragraph inside it,
+       for example. The reader-facing CSS already renders the three
+       kinds as visually distinct voices, so the juxtaposition is part
+       of the intended annotation aesthetic.
 
     Returns the original ``ann.comments`` list on success so callers can chain
     the result without touching ``ann``.
     """
-    used: set[int] = set()
+    used: dict[CommentKind, set[int]] = {}
 
     for comment in ann.comments:
         # Range check
@@ -128,14 +134,15 @@ def validate_block_annotations(ann: BlockAnnotation, block_size: int) -> list[Co
                 f"comment target_p_ids must be contiguous, got {_format_pids(comment.target_p_ids)}"
             )
 
-        # Overlap check (within the same block)
+        # Overlap check — same kind only; different kinds may share p_ids
+        bucket = used.setdefault(comment.kind, set())
         for pid in sorted_pids:
-            if pid in used:
+            if pid in bucket:
                 raise _errors.CommentOverlapError(
-                    f"p_id {pid} is targeted by more than one comment "
+                    f"p_id {pid} is targeted by more than one {comment.kind.value} comment "
                     f"in the same block (duplicate range starts at {sorted_pids[0]})"
                 )
-            used.add(pid)
+            bucket.add(pid)
 
     return ann.comments
 

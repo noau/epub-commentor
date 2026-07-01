@@ -20,9 +20,10 @@ from .inject import (
     inject_css_zip,
     inject_opf,
 )
-from .process import ChapterAnnotation, process_chapters
+from .process import AnnotationFilter, ChapterAnnotation, process_chapters
 
 __all__ = [
+    "AnnotationFilter",
     "Chapter",
     "ChapterAnnotation",
     "ChapterFilter",

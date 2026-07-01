@@ -7,26 +7,64 @@
   <p>English | <a href="./README_zh-CN.md">中文</a></p>
 </div>
 
+> This project contains LLM generated content such as code or documentation.
 
-Want AI-generated reading guidance without losing the original text? **EPUB Commentor** adds LLM-authored introductions, summaries, and marginalia directly into your EPUBs — the original prose stays intact, and the commentary lands as styled `<aside>` blocks an e-ink reader can render natively.
+**EPUB Commentor** reads an EPUB and hands you back the *same book* — every word of the original untouched — with AI-written reading companions added alongside the text: a short **introduction** before a passage, a **summary** after it, and occasional **margin notes** on tricky terms. The commentary is rendered as quiet, styled side-blocks that Kindle, Kobo, and other e-ink readers display natively. Import the result and read.
 
-A fork of [oomol-lab/epub-translator](https://github.com/oomol-lab/epub-translator) — same XML/EPUB machinery, but the LLM is retargeted from "translate paragraphs" to "annotate them." The result is an EPUB that ships as both **book and study companion**, importable straight into Kindle / Kobo / Calibre without any post-processing.
+**What it looks like** — your original text is untouched; the model only adds the bordered blocks around it:
 
-![Commentary Effect](./docs/images/commentary.png)
+<p align="center">
+  <img src="./docs/imgs/example.png" alt="Example"
+       style="max-width: 560px; width: 100%; height: auto;" />
+</p>
 
-## Why commentary (not translation)?
+<p align="center"><sub>Example generated from 老舍《茶馆》.</sub></p>
 
-Most LLM-driven epub tooling rewrites the prose. That works for bilingual reading, but it strips the original voice and makes the book opaque to anyone studying the language. Commentor instead *keeps the original* and injects three kinds of new content beside it:
+## What you get
 
-- **`intro`** — A 1–3 sentence scene-setter placed *before* the first target paragraph. Anchors the reader to what's coming.
-- **`summary`** — A 1–3 sentence synthesis placed *after* the last target paragraph. Closes the loop on the block.
-- **`note`** — A short gloss on a specific term or concept. Optional, can sit before or after the target.
+- **Your original book, intact.** No paragraph is rewritten, translated, or reordered. Commentor only *adds* content next to the text.
+- **Three kinds of companion notes**, all authored by the model:
+  - **Intro** — a 1–3 sentence lead-in placed *before* a passage, so you know what's coming.
+  - **Summary** — a 1–3 sentence wrap-up placed *after* a passage, tying it together.
+  - **Note** — a brief gloss on a specific term or idea.
+- **Commentary in any language you choose** — read an English book with Chinese notes, or vice-versa.
+- **E-ink friendly styling** — greyscale, no color or shadow, and notes never split across a page break.
+- **A ready-to-read `.epub`** written next to your source file. Nothing to convert afterward — drag it onto your reader.
 
-The output preserves every `<p>`, every `<em>`, every heading hierarchy of the source — the only new DOM is `<aside class="commentary commentary-{kind}">` siblings, plus a single CSS file referenced from every chapter's `<head>`.
+---
+
+## Table of contents
+
+- [What you get](#what-you-get)
+- [Table of contents](#table-of-contents)
+- [Installation](#installation)
+- [Get an API key ready](#get-an-api-key-ready)
+- [Configure `format.json`](#configure-formatjson)
+  - [Provider examples](#provider-examples)
+  - [Also valid in `format.json`: pipeline options](#also-valid-in-formatjson-pipeline-options)
+- [Run it](#run-it)
+  - [A realistic first run](#a-realistic-first-run)
+- [Choosing chapters interactively](#choosing-chapters-interactively)
+- [Tuning the commentary](#tuning-the-commentary)
+- [Command reference](#command-reference)
+- [Reading the result on your device](#reading-the-result-on-your-device)
+- [Saving money with the cache](#saving-money-with-the-cache)
+- [When something goes wrong](#when-something-goes-wrong)
+  - [Common issues](#common-issues)
+- [Using it from Python](#using-it-from-python)
+  - [Watching progress](#watching-progress)
+  - [Picking chapters programmatically](#picking-chapters-programmatically)
+  - [`CommentConfig` options](#commentconfig-options)
+- [FAQ](#faq)
+- [Related projects](#related-projects)
+- [License](#license)
+- [Support](#support)
+
+---
 
 ## Installation
 
-Requires **Python 3.13+** and [Poetry](https://python-poetry.org/).
+You need **Python 3.13+** and [Poetry](https://python-poetry.org/) (Python's dependency manager).
 
 ```bash
 git clone https://github.com/noau/epub-commentor.git
@@ -34,395 +72,372 @@ cd epub-commentor
 poetry install
 ```
 
-## Quick Start
+That's it — `poetry install` pulls every dependency into an isolated environment. From here on, prefix commands with `poetry run` so they use that environment.
 
-### 1. Configure credentials
+> **Don't have Poetry?** Install it once with `pipx install poetry` (or follow the [official guide](https://python-poetry.org/docs/#installation)).
 
-Copy the template and fill in your OpenAI-compatible endpoint:
+---
+
+## Get an API key ready
+
+Commentor talks to any **OpenAI-compatible** chat API — that includes OpenAI itself, Azure OpenAI, and most self-hosted or third-party gateways (DeepSeek, Together, Groq, local Ollama with an OpenAI shim, etc.). You need three things from your provider:
+
+1. An **API key** (a secret string, usually starting `sk-...`).
+2. The **base URL** of the API (the part ending in `/v1`).
+3. The **model name** you want to use.
+
+Keep these handy for the next step.
+
+---
+
+## Configure `format.json`
+
+Commentor reads your credentials from a file called `format.json`. Create it once by copying the template:
 
 ```bash
 cp format.template.json format.json
-# edit format.json with your key, url, model, token_encoding, ...
 ```
 
-`format.json` is a flat object — see [Configuration](#configuration) below.
-
-### 2. Run the CLI
-
-```bash
-poetry run epub-commentor path/to/source.epub --synopsis "A philosophical fairy tale."
-# Output: <source-stem>.commented.epub written next to the source
-```
-
-Or invoke it directly without installing the entrypoint:
-
-```bash
-poetry run python scripts/comment_epub.py path/to/source.epub --synopsis "..."
-```
-
-### 3. Or call the Python API
-
-```python
-from epub_commentor import LLM, comment_epub, CommentConfig, CommentKind, CommentPosition
-
-llm = LLM(
-    key="your-api-key",
-    url="https://api.openai.com/v1",
-    model="gpt-4",
-    token_encoding="o200k_base",
-)
-
-config = CommentConfig(
-    book_synopsis="A philosophical fairy tale about a pilot stranded in the Sahara.",
-    target_language="English",
-    block_size=6,                # paragraphs per Stage 2 batch
-    concurrency=4,               # intra-chapter worker threads
-    kinds=(CommentKind.INTRO, CommentKind.SUMMARY, CommentKind.NOTE),
-    position=CommentPosition.BEFORE,
-)
-
-result = comment_epub(
-    source="path/to/source.epub",
-    output="path/to/annotated.epub",   # default: <stem>.commented.epub next to source
-    llm=llm,
-    config=config,
-)
-
-print(f"chapters processed: {result.chapters_processed}")
-print(f"chapters skipped:   {result.chapters_skipped}")
-print(f"comments generated: {result.total_comments}")
-print(f"total tokens:       {result.total_tokens}")
-```
-
-### With progress tracking
-
-The CLI installs a `rich` `Progress` by default — two stacked task rows share the same frame: the top row tracks chapter progress (`Ch. 3/28: Title` + `3/28` + ETA), the bottom row tracks block progress within the current chapter (`(block 12/24)` + `12/24` + ETA). Each row has its own spinner, bar, and count. `extract` and `inject` print single status lines to stderr.
-
-For programmatic use, install the same renderer explicitly or roll your own:
-
-```python
-from epub_commentor import (
-    LLM,
-    comment_epub,
-    CommentConfig,
-    ProgressEvent,
-    make_default_progress_callback,
-)
-
-llm = LLM(...)
-config = CommentConfig(...)
-
-# Default renderer: a rich Progress on stderr with two stacked task rows (use quiet=True to suppress).
-progress = make_default_progress_callback(quiet=False)
-result = comment_epub(source="book.epub", llm=llm, config=config, progress_callback=progress)
-```
-
-`ProgressEvent` carries everything the renderer needs:
-
-| Field | Type | Meaning |
-|---|---|---|
-| `stage` | `str` | `"extract"` / `"process"` / `"inject"`. |
-| `substage` | `str \| None` | Only set for `process`: `"scan"` (chapter) or `"annotate"` (block). |
-| `current` / `total` | `int` | Progress within the current stage. |
-| `message` | `str \| None` | Free-form description (e.g. chapter title). |
-
-```python
-# Custom renderer example: log every event instead of using the default bar.
-def log_progress(event: ProgressEvent) -> None:
-    label = event.substage or event.stage
-    print(f"[{label}] {event.current}/{event.total}  {event.message or ''}")
-
-comment_epub(source="book.epub", llm=llm, config=config, progress_callback=log_progress)
-```
-
-## API Reference
-
-### `comment_epub(source, output=None, *, llm, config=None, progress_callback=None, chapter_filter=None) -> CommentorResult`
-
-The single entry point. Runs extract → process → inject on `source` and writes a new EPUB to `output` (default: `<stem>.commented.epub` next to the source).
-
-| Parameter | Type | Description |
-|---|---|---|
-| `source` | `Path \| str` | Path to the source EPUB. Read but never modified. |
-| `output` | `Path \| str \| None` | Target path. `None` → `<stem>.commented.epub` next to the source. |
-| `llm` | `LLMProtocol` | Any LLM satisfying the protocol (`LLM` in production, `MockLLM` in tests). |
-| `config` | `CommentConfig \| None` | Pipeline knobs. `None` → defaults. |
-| `progress_callback` | `Callable[[ProgressEvent], None] \| None` | Optional hook fired at stage boundaries and per chapter / per block. See [With progress tracking](#with-progress-tracking). |
-| `chapter_filter` | `ChapterFilter \| None` | Optional `Callable[[list[Chapter]], list[bool]]`. Invoked between extract and process; returns a parallel bool mask (`True` = keep, `False` = drop). See [Filtering chapters](#filtering-chapters). |
-
-Returns a `CommentorResult` with `output_path`, `annotations`, per-chapter counts, and the LLM's token totals (`total_tokens`, `input_tokens`, `input_cache_tokens`, `output_tokens`).
-
-#### Filtering chapters
-
-The library exposes a generic `ChapterFilter` callback so any caller (notebook, web UI, future GUI) can decide which chapters go through the LLM:
-
-```python
-from epub_commentor import Chapter, comment_epub
-
-def only_real_chapters(chapters: list[Chapter]) -> list[bool]:
-    """Skip the first spine entry (often a title page) and any empty chapter."""
-    return [
-        i > 0 and any(True for _ in ch.body.iter("p"))
-        for i, ch in enumerate(chapters)
-    ]
-
-result = comment_epub(
-    source="book.epub",
-    llm=llm,
-    config=config,
-    chapter_filter=only_real_chapters,
-)
-```
-
-Dropped chapters never reach the LLM stage — their bytes flow through the target ZIP unchanged (`Zip.__exit__` migrates them as-is from the source), so no restore step is needed. The callback receives a defensive copy of the spine-ordered chapter list.
-
-If the returned mask is not a `list[bool]` of matching length, `comment_epub` raises `ValueError` (a programmer error, not a recoverable `CommentorError`).
-
-The CLI ships a ready-made implementation: `-i` / `--interactive` opens a `rich-selector` multi-select so you can pick chapters at the terminal.
-
-### `CommentConfig`
-
-All runtime knobs in one dataclass:
-
-| Field | Default | Description |
-|---|---|---|
-| `position` | `CommentPosition.BEFORE` | Default position when the LLM doesn't choose (`before` / `after`). |
-| `kinds` | `(INTRO, SUMMARY, NOTE)` | Allowed annotation kinds the Stage 2 prompt enumerates. |
-| `block_size` | `6` | Paragraphs per Stage 2 batch (the batch the LLM annotates in one call). |
-| `max_scan_retries` | `3` | Stage 1 retries on malformed `ChapterMemo` JSON. |
-| `max_json_retries` | `3` | Stage 2 retries on malformed `BlockAnnotation` JSON. |
-| `concurrency` | `4` | Intra-chapter worker threads for Stage 2 blocks. |
-| `cache_seed_user_id` | `"default"` | Cache namespace component. Change to invalidate per user / book. |
-| `book_synopsis` | `None` | Free-form context forwarded to both stages. |
-| `inject_css` | `True` | If `False`, skip writing `commentary.css` / patching the OPF / adding head links. |
-| `css_path_in_epub` | `Path("Styles/commentary.css")` | Where the CSS lands inside the EPUB. |
-| `target_language` | `"English"` | The language the LLM should author commentary in. |
-| `fail_on_empty_chapter` | `False` | If `True`, raise `CommentNoParagraphsError` instead of skipping. |
-
-### `CommentKind` / `CommentPosition`
-
-```python
-from epub_commentor import CommentKind, CommentPosition
-
-CommentKind.INTRO       # "intro"
-CommentKind.SUMMARY     # "summary"
-CommentKind.NOTE        # "note"
-
-CommentPosition.BEFORE  # "before"
-CommentPosition.AFTER   # "after"
-```
-
-### CLI
-
-The `epub-commentor` console script (registered in `pyproject.toml`) accepts:
-
-```text
-poetry run epub-commentor SOURCE [-o OUTPUT] [--format-json PATH] [--synopsis TEXT]
-                              [--block-size N] [--concurrency N]
-                              [--max-json-retries N] [--max-scan-retries N]
-                              [--cache-path DIR] [--log-dir DIR] [--debug]
-                              [--cache-user-id ID]
-                              [--target-language LANG]
-                              [--css-path PATH] [--no-css]
-                              [--fail-on-empty-chapter] [-q] [-i]
-```
-
-All flags map 1:1 onto `CommentConfig` fields (plus `--cache-path` / `--log-dir` / `--debug` for the LLM). Run `epub-commentor --help` for the full list.
-
-#### Interactive chapter selection (`-i` / `--interactive`)
-
-By default every chapter in the spine goes through the LLM pipeline. To choose interactively instead, pass `-i`:
-
-```bash
-poetry run epub-commentor path/to/source.epub --synopsis "..." -i
-```
-
-After the EPUB is parsed, a checkbox list of all chapters appears. Use `↑/↓` to move, `space` or `enter` to toggle, `a` to select all, `i` to invert, `c` to clear, then move to `[ Confirm ]` and press `enter` to submit (`esc` / `q` to cancel). Chapters with zero `<p>` elements (cover pages, nav documents, image-only sections) are pre-deselected so a user can submit immediately to skip them all at once.
-
-When `-i` is set, the progress bar is automatically suppressed — rich-selector owns the terminal. The flag requires a TTY: piping the source through stdin exits with code `2`.
-
-## Configuration
-
-`format.json` is a flat object the CLI / API passes straight into `LLM(**cfg)`:
+Then open `format.json` and fill it in. Here's a complete example with **every field explained** — you only *need* to change `key`, `url`, `model`, and `token_encoding`:
 
 ```json
 {
-  "key": "sk-...",
+  "key": "sk-your-secret-api-key",
   "url": "https://api.openai.com/v1",
-  "model": "gpt-4",
+  "model": "gpt-4o",
   "token_encoding": "o200k_base",
-  "timeout": null,
+  "timeout": 360.0,
   "retry_times": 5,
   "retry_interval_seconds": 6.0,
   "temperature": 0.4,
-  "top_p": null,
+  "top_p": 0.9,
   "cache_path": "./commentary_cache",
   "log_dir_path": null
 }
 ```
 
-| Provider | Example `url` | Notes |
-|---|---|---|
-| OpenAI | `https://api.openai.com/v1` | Use `o200k_base` for `gpt-4o`, `cl100k_base` for older models. |
-| Azure OpenAI | `https://<res>.openai.azure.com/openai/deployments/<dep>` | Match the deployment name in `model`. |
-| Any OpenAI-compatible API | `https://your-service.com/v1` | Match `token_encoding` to the tokenizer your model uses. |
+| Field | Required? | What to put | Notes |
+|---|---|---|---|
+| `key` | **Yes** | Your API key. | Keep this secret — don't commit `format.json` to a public repo. |
+| `url` | **Yes** | The API base URL, ending in `/v1`. | See the provider table below. |
+| `model` | **Yes** | The model name. | e.g. `gpt-4o`, `deepseek-chat`, or your Azure deployment name. |
+| `token_encoding` | **Yes** | The tokenizer name your model uses. | Used only to count tokens for the progress display. Use `o200k_base` for GPT-4o / GPT-4.1 / o-series, `cl100k_base` for older GPT-4 / GPT-3.5. When unsure, `o200k_base` is a safe default. |
+| `timeout` | No | Seconds to wait for one response before giving up. | `360.0` is generous for long chapters. Set `null` for no limit. |
+| `retry_times` | No | How many times to retry a failed network call. | Default `5`. |
+| `retry_interval_seconds` | No | Seconds to wait between retries. | Default `6.0`. |
+| `temperature` | No | Creativity of the writing, `0.0`–`1.0`. | `0.4` keeps notes expressive but on-topic. Higher = more varied, lower = more literal. |
+| `top_p` | No | Alternative to temperature (nucleus sampling). | Leave as `0.9`, or set `null` to ignore. |
+| `cache_path` | No | Folder to store responses so re-runs are free. | See [Saving money with the cache](#saving-money-with-the-cache). Omit or `null` to disable. |
+| `log_dir_path` | No | Folder for detailed debug logs. | `null` = off. See [When something goes wrong](#when-something-goes-wrong). |
 
-### Single-LLM philosophy
+### Provider examples
 
-The original `epub-translator` used two LLM instances (one creative, one structural). Commentor collapses this to a **single** `LLM`:
+| Provider | `url` | `model` (example) | `token_encoding` |
+|---|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o` | `o200k_base` |
+| Azure OpenAI | `https://<resource>.openai.azure.com/openai/deployments/<deployment>` | *your deployment name* | match your model |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` | `cl100k_base` |
+| Any OpenAI-compatible service | `https://your-service.com/v1` | *provider-specific* | match your model's tokenizer |
 
-- Stage 1 (`scan_chapter` — full-chapter memo) and Stage 2 (`annotate_block` — per-block annotations) share one client.
-- One temperature (e.g. `0.4`) balances "expressive prose" and "structured JSON."
-- Token statistics remain single-instance; no aggregation needed.
+> **You can keep `format.json` next to your books.** Commentor looks for it in three places, in order: the path you pass with `--format-json`, then next to the source EPUB, then in the current folder.
 
-## How it works
+### Also valid in `format.json`: pipeline options
 
-Commentor runs a **two-stage LLM pipeline** per chapter:
+`format.json` isn't only for credentials. You can drop any **pipeline option** into the same flat file to make it a persistent default — handy when you don't want to retype the same flag on every run:
 
-### Stage 1 — Scan
-
-The full chapter body is sent as plain text along with book metadata and your synopsis. The LLM returns a `ChapterMemo`:
-
-```jsonc
+```json
 {
-  "core_thesis": "One sentence capturing this chapter's main idea.",
-  "outline": ["3..7 sub-topics covered, in order"],
-  "key_terms": [{"term": "...", "gloss": "..."}],
-  "tone": "didactic | contemplative | ...",
-  "target_audience": "general readers | ...",
-  "reading_anchors": ["0..3 specific passages to flag"]
+  "key": "sk-your-secret-api-key",
+  "url": "https://api.openai.com/v1",
+  "model": "gpt-4o",
+  "token_encoding": "o200k_base",
+
+  "concurrency": 8,
+  "block_size": 8,
+  "target_language": "English",
+  "book_synopsis": "A philosophical fairy tale about a stranded pilot."
 }
 ```
 
-### Stage 2 — Annotate
+Any field from the [`CommentConfig` table](#commentconfig-options) works here — `concurrency`, `block_size`, `target_language`, `book_synopsis`, `position`, `kinds`, `max_json_retries`, and so on. Two rules:
 
-The chapter's paragraphs are sliced into `block_size`-shaped chunks. Each chunk is tagged with `data-p-id="0..N"` so the LLM can refer to them by index. Together with the memo + synopsis, the LLM produces per-block annotations:
+- **Use the config field names, and command-line flags win.** A value in `format.json` is only a *default*; passing the matching flag (e.g. `--concurrency 4`) overrides it for that run. Note the file uses the config field name (`book_synopsis`, `cache_seed_user_id`), not the flag spelling (`--synopsis`, `--cache-user-id`).
+- **Unknown keys are ignored** with a warning on stderr — a typo won't crash the run.
 
-```jsonc
-{
-  "comments": [
-    {
-      "target_p_ids": [0, 1, 2],        // contiguous subset of the block
-      "position": "before" | "after",   // relative to the FIRST / LAST p_id
-      "kind": "intro" | "summary" | "note",
-      "content": "1-4 sentences in <target_language>"
-    }
-  ]
-}
+---
+
+## Run it
+
+The basic command takes one EPUB and (optionally) a one-line synopsis to set the tone:
+
+```bash
+poetry run epub-commentor "path/to/book.epub" --synopsis "A philosophical fairy tale about a stranded pilot."
 ```
 
-Validation enforces:
+When it finishes you'll see a summary panel, and a new file named **`book.commented.epub`** appears next to your original. That's the file to read.
 
-1. Every `target_p_ids` value sits in `[0, block_size)`.
-2. The range is contiguous (e.g. `[3,4,5]` OK; `[2,4]` rejected).
-3. Within a single block, no two comments share a paragraph.
+Want it somewhere specific? Use `-o`:
 
-A block that fails all `max_json_retries` attempts raises `CommentInvalidJSONError`.
+```bash
+poetry run epub-commentor "book.epub" -o "~/Kindle/book-annotated.epub" --synopsis "..."
+```
 
-### Inject
+The **`--synopsis`** flag is optional but recommended — a single sentence about the book helps the model pitch its notes at the right level. If you skip it, Commentor still works using the book's own metadata.
 
-Each `CommentItem` becomes an `<aside class="commentary commentary-{kind}" id="cmt-...">` placed adjacent to its anchor paragraph. CSS is wired in three idempotent steps:
+### A realistic first run
 
-1. `commentary.css` is added to the target ZIP (via `Zip.add()`).
-2. The OPF `<manifest>` gains `<item id="commentary-css" ...>` (skipped if already present).
-3. Every chapter's `<head>` gains a `<link rel="stylesheet" type="text/css" href="..."/>` (skipped if already present).
+```bash
+poetry run epub-commentor "The little prince.epub" \
+    --synopsis "A poetic tale about a pilot who meets a small prince from another planet." \
+    --target-language "English"
+```
 
-The CSS targets e-ink: greyscale borders, no box-shadow, no color, `break-inside: avoid` so every `<aside>` prints as one block.
+While it runs you'll see a live progress display: the top line tracks chapters (`Ch. 3/28: ...`), the bottom line tracks the smaller batches within the current chapter. Long books take a while and cost real API tokens — the final summary shows exactly how many tokens were used.
 
-## Errors
+---
 
-Every error the pipeline raises derives from `CommentorError` (which inherits from `ValueError`):
+## Choosing chapters interactively
 
-| Exception | When |
+Most EPUBs contain more than chapters: cover pages, tables of contents, copyright notices. To pick exactly what gets annotated, add **`-i`** (interactive):
+
+```bash
+poetry run epub-commentor "book.epub" --synopsis "..." -i
+```
+
+A checklist of every chapter appears. Controls:
+
+| Key | Action |
 |---|---|
-| `CommentScanFailedError` | Stage 1 could not produce a valid `ChapterMemo` after all retries. |
-| `CommentInvalidJSONError` | Stage 2 could not produce a valid `BlockAnnotation` after all retries. |
-| `CommentOrphanPIdError` | A comment references p_ids outside the block, or a non-contiguous range. |
-| `CommentOverlapError` | Two comments inside the same block share one or more p_ids. |
-| `CommentNoParagraphsError` | A chapter has zero `<p>` elements and `fail_on_empty_chapter=True`. |
+| `↑` / `↓` | Move up / down |
+| `Space` or `Enter` | Toggle the highlighted chapter |
+| `A` | Select all |
+| `I` | Invert selection |
+| `C` | Clear all |
+| move to `[ Confirm ]` + `Enter` | Start annotating the selected chapters |
+| `Esc` / `Q` | Cancel and exit |
+
+Chapters with no real text (covers, navigation, image-only pages) are **pre-unchecked** for you — so you can often just press `Enter` on `[ Confirm ]` to skip all the junk at once. Everything you leave unchecked is copied into the output untouched.
+
+> `-i` needs a real terminal. If you pipe input or run it in a script, it exits with an error instead of guessing.
+
+---
+
+## Tuning the commentary
+
+You control the notes through a handful of flags. All are optional.
+
+- **`--target-language "Chinese"`** — the language the notes are written in. The book itself is never translated; only the added commentary uses this language. Default: Chinese.
+- **`--synopsis "..."`** — a one-line description of the book to steer the tone.
+- **`--block-size 6`** — how many paragraphs the model looks at per batch. Smaller = more granular, finer notes but more API calls (higher cost); larger = broader notes, cheaper. Default: `6`.
+- **`--concurrency 4`** — how many batches within a chapter are processed at once. Higher finishes faster but hits your API's rate limits harder. Default: `4`.
+- **`--no-css`** — inject only the note blocks, without the built-in styling (advanced; use if you'll supply your own stylesheet).
+
+---
+
+## Command reference
+
+Run `poetry run epub-commentor --help` any time for the authoritative list. Every flag below is optional except `source`.
+
+| Flag | Meaning |
+|---|---|
+| `source` | Path to the EPUB to annotate. **Required.** Read-only — your original is never modified. |
+| `-o`, `--output PATH` | Where to write the result. Default: `<name>.commented.epub` next to the source. |
+| `--format-json PATH` | Where to read credentials from. Default: `format.json` next to the source, then the current folder. |
+| `--synopsis TEXT` | One-line book description to steer tone. |
+| `--target-language LANG` | Language for the commentary. Default: `Chinese`. |
+| `--block-size N` | Paragraphs per batch. Default: `6`. |
+| `--concurrency N` | Batches processed at once within a chapter. Default: `4`. |
+| `--max-json-retries N` | Retries when the model returns malformed notes for a batch. Default: `3`. |
+| `--max-scan-retries N` | Retries when the model's chapter overview comes back malformed. Default: `3`. |
+| `--cache-path DIR` | Folder to cache responses (makes re-runs free). |
+| `--css-path PATH` | Where the stylesheet lives inside the EPUB. Default: `Styles/commentary.css`. |
+| `--no-css` | Skip adding the stylesheet. |
+| `--fail-on-empty-chapter` | Stop with an error on a chapter that has no paragraphs, instead of skipping it. |
+| `--log-dir DIR` | Write detailed debug logs to this folder. |
+| `--debug` | Turn on debug logging (defaults the log folder to `./temp/logs/`). |
+| `--cache-user-id ID` | Namespace for the cache. Change it to force fresh results for a new book/user. |
+| `-i`, `--interactive` | Pick chapters from a checklist before running. |
+| `-q`, `--quiet` | Suppress the progress display and final summary. |
+
+---
+
+## Reading the result on your device
+
+The output is a standard `.epub`. To read it:
+
+- **Kindle** — Email the file to your [Send to Kindle](https://www.amazon.com/sendtokindle) address, or drag it into the Send to Kindle desktop app. (Modern Kindles accept EPUB directly.)
+- **Kobo / PocketBook / other e-ink** — Copy the `.epub` onto the device over USB, or add it through the device's library app.
+- **Calibre** — Just add the file to your library; the commentary styling comes along.
+- **Apple Books / Google Play Books** — Import the file directly.
+
+The notes appear as bordered side-blocks in the flow of the text, styled to stay readable on greyscale screens.
+
+---
+
+## Saving money with the cache
+
+LLM calls cost money, and a long book is many calls. If you set a **cache folder**, Commentor remembers every response — so if you re-run the same book (say, after tweaking one chapter, or after a crash), the parts it already did come back instantly and for free.
+
+```bash
+poetry run epub-commentor "book.epub" --synopsis "..." --cache-path ./commentary_cache
+```
+
+Or set `"cache_path": "./commentary_cache"` in `format.json` so it's always on.
+
+The cache is keyed by the book content and your settings, so changing the synopsis, language, or model correctly produces fresh notes. To deliberately start over for the same book, delete the cache folder or pass a new `--cache-user-id`.
+
+---
+
+## When something goes wrong
+
+If a run fails or the notes look off, turn on **debug logging** to see exactly what the model was asked and what it replied:
+
+```bash
+poetry run epub-commentor "book.epub" --synopsis "..." --debug
+# logs land in ./temp/logs/ — one file per request
+```
+
+Each log file records the full request, the raw response, and — if a batch had to be retried — the error and the model's exact malformed output. This is the first thing to check when a specific chapter produces strange or missing notes.
+
+### Common issues
+
+| Symptom | Likely cause / fix |
+|---|---|
+| `format.json not found` | You didn't copy the template. Run `cp format.template.json format.json` and fill it in. |
+| `format.json is not valid JSON` | A typo — usually a trailing comma or missing quote. Validate it in any JSON linter. |
+| Authentication / 401 errors | Wrong `key` or `url`. Double-check both with your provider. |
+| Timeouts on long chapters | Raise `timeout` in `format.json` (e.g. `600.0`), or lower `--block-size`. |
+| Rate-limit errors | Lower `--concurrency` (try `2` or `1`). |
+| A chapter got no notes | It may have no real paragraphs (a cover or nav page) — that's normal and it's skipped. Use `-i` to see what's what. |
+| `--interactive requires a TTY` | You ran `-i` in a pipe or script. Drop `-i`, or run it in a normal terminal. |
+
+---
+
+## Using it from Python
+
+Prefer to script it? The same functionality is a single function call.
+
+```python
+from epub_commentor import LLM, comment_epub, CommentConfig
+
+llm = LLM(
+    key="sk-your-api-key",
+    url="https://api.openai.com/v1",
+    model="gpt-4o",
+    token_encoding="o200k_base",
+)
+
+config = CommentConfig(
+    book_synopsis="A philosophical fairy tale about a stranded pilot.",
+    target_language="English",   # commentary language; the book is never translated
+    block_size=6,                # paragraphs per batch
+    concurrency=4,               # batches processed at once within a chapter
+)
+
+result = comment_epub(
+    source="book.epub",
+    output="book-annotated.epub",  # optional; defaults to <name>.commented.epub
+    llm=llm,
+    config=config,
+)
+
+print(f"chapters annotated: {result.chapters_processed}")
+print(f"comments generated: {result.total_comments}")
+print(f"tokens used:        {result.total_tokens}")
+```
+
+### Watching progress
+
+Pass a `progress_callback` to get live updates. The easiest option is the same renderer the CLI uses:
+
+```python
+from epub_commentor import comment_epub, make_default_progress_callback
+
+progress = make_default_progress_callback(quiet=False)  # quiet=True to silence it
+comment_epub(source="book.epub", llm=llm, config=config, progress_callback=progress)
+```
+
+Or write your own — the callback receives a `ProgressEvent` with `stage`, `current`, `total`, and a `message`:
+
+```python
+def on_progress(event):
+    print(f"[{event.stage}] {event.current}/{event.total}  {event.message or ''}")
+
+comment_epub(source="book.epub", llm=llm, config=config, progress_callback=on_progress)
+```
+
+### Picking chapters programmatically
+
+Provide a `chapter_filter` that returns one `True`/`False` per chapter (in reading order):
+
+```python
+from epub_commentor import comment_epub, Chapter
+
+def only_real_chapters(chapters: list[Chapter]) -> list[bool]:
+    # keep chapters that actually contain paragraphs
+    return [any(True for _ in ch.body.iter("p")) for ch in chapters]
+
+comment_epub(source="book.epub", llm=llm, config=config, chapter_filter=only_real_chapters)
+```
+
+### `CommentConfig` options
+
+| Option | Default | What it does |
+|---|---|---|
+| `book_synopsis` | `None` | One-line description to steer tone. |
+| `target_language` | `"Chinese"` | Language of the commentary. |
+| `block_size` | `6` | Paragraphs per batch. |
+| `concurrency` | `4` | Batches processed at once within a chapter. |
+| `kinds` | all three | Which note types to allow (`INTRO`, `SUMMARY`, `NOTE`). |
+| `position` | `BEFORE` | Default placement when the model doesn't specify. |
+| `max_scan_retries` | `3` | Retries on a malformed chapter overview. |
+| `max_json_retries` | `3` | Retries on malformed batch notes. |
+| `inject_css` | `True` | Whether to add the built-in stylesheet. |
+| `css_path_in_epub` | `Styles/commentary.css` | Where the stylesheet lands inside the EPUB. |
+| `fail_on_empty_chapter` | `False` | Error (instead of skip) on a chapter with no paragraphs. |
+| `cache_seed_user_id` | `"default"` | Cache namespace; change to force fresh results. |
+
+`comment_epub` raises a `CommentorError` if a chapter can't be annotated after all retries — catch it if you want to handle failures gracefully:
 
 ```python
 from epub_commentor import comment_epub, CommentorError
 
 try:
-    result = comment_epub("book.epub", llm=llm)
+    comment_epub("book.epub", llm=llm)
 except CommentorError as exc:
-    # Every recoverable / structural failure lands here.
-    print(f"failed: {type(exc).__name__}: {exc}")
+    print(f"failed: {exc}")
 ```
 
-## Concurrency model
+---
 
-- **Inter-chapter**: sequential. Stage 1 dominates per-chapter LLM traffic; no benefit to fanning out across chapters.
-- **Intra-chapter**: parallel via `ThreadPoolExecutor(max_workers=concurrency)`. Stage 2 blocks within one chapter are independent.
-- **Cache**: `LLMContext` commits cache writes under a global lock so multi-threaded runs don't race.
+## FAQ
 
-## Debug logging
+**Does it change or translate my book?**
+No. The original text is preserved exactly. Commentor only *adds* note blocks beside it. `--target-language` controls the language of those added notes, not the book.
 
-Long books benefit from a paper trail when something goes wrong on chapter 17 of 28. Pass `--log-dir PATH` to the CLI (or set `log_dir_path` in `format.json`) and Commentor drops one `request YYYY-MM-DD HH-MM-SS.log` file per LLM context. Each file mixes structured sections so you can grep for what you need:
+**Can I read the result on a Kindle?**
+Yes — see [Reading the result on your device](#reading-the-result-on-your-device). The output is a plain EPUB that modern Kindles and every other reader accept.
 
-```bash
-# Turn on debug logging and write to ./temp/logs.
-poetry run epub-commentor tests/assets/The\ little\ prince.epub \
-    --synopsis "..." --log-dir ./temp/logs --debug
-```
+**How much does a book cost to annotate?**
+It depends on the book's length and your model's pricing. The summary at the end of each run reports the exact token count. Use `--cache-path` so re-runs don't pay twice, and `-i` to skip chapters you don't need.
 
-```
-08:29:12    [[Parameters]]:
-              temperature=0.4
-              top_p=0.9
-              max_tokens=None
-              cache_key=901e9296231d
-08:29:12    [[Request]]:
-              System: ...
-              User: ...
-08:29:12    [[CacheCheck]] cache_key=901e9296231d; hit=false
-08:29:14    [[Response]]:
-              {"comments": [...]}
-08:29:15    [[StageError]] stage=annotate; attempt=1/3; error=ValidationError: ...
-              Raw excerpt: {"comments": [{"target_p_ids": ...
-08:29:18    [[FinalError]] stage=annotate; attempts_exhausted=true; exception=...
-```
+**Do I need an OpenAI account specifically?**
+No — any OpenAI-compatible API works (OpenAI, Azure, DeepSeek, local gateways, …). Just point `url` and `model` at your provider.
 
-| Section | Written by | What it tells you |
-|---|---|---|
-| `[[Parameters]]` | `LLMExecutor` | temperature / top_p / max_tokens / cache_key for the request. |
-| `[[Request]]` | `LLMExecutor` | Full system + user messages (and any assistant retries). |
-| `[[Response]]` | `LLMExecutor` | The raw model output for that attempt. |
-| `[[CacheCheck]] cache_key=<prefix>; hit=<bool>` | `LLMContext` | Cache short-circuit outcome. Pair with the matching `cache_key` in `[[Parameters]]`. |
-| `[[StageError]] stage=<scan\|annotate>; attempt=N/M; error=...; Raw excerpt: <truncated>` | `memo.py` / `block.py` | JSON validation failed; the raw body is captured so you can see exactly what the model returned. |
-| `[[FinalError]] stage=...; attempts_exhausted=true; exception=...` | `block.py` | All retries exhausted — last error before `CommentInvalidJSONError` is raised. |
+**Why did a chapter get skipped?**
+It had no readable paragraphs — typically a cover, table of contents, or image-only page. That's intentional. Pass `--fail-on-empty-chapter` if you'd rather be told loudly.
 
-> `scripts/check_duplicate_ids.py` still works against this directory — it scans for `<aside id=` patterns, which the new sections never contain.
+---
 
-## Testing
+## Related projects
 
-```bash
-# Unit + integration + e2e (~197 tests against real asset files; 3 pre-existing failures unrelated to this feature)
-poetry run pytest tests/ -v
-
-# Just the commentary-specific tests
-poetry run pytest tests/test_commentor_*.py -v
-
-# The 10 hand-curated challenge cases (driven by MockLLM, no network)
-poetry run python scripts/comment_challenge.py
-```
-
-`tests/_mock_llm.py` provides a `MockLLM` that routes canned JSON responses by cache-seed prefix (`:scan:` vs `:annotate:`). When constructed with `MockLLM(log_dir_path=...)`, the mock writes the same `[[Section]]` files as production `LLM`, so `tests/test_commentor_log.py` can assert on log content without an OpenAI key.
-
-## Related Projects
-
-- [PDF Craft](https://github.com/oomol-lab/pdf-craft) — Convert scanned / image-based PDF to EPUB first, then run it through Commentor.
-- [SpineDigest](https://github.com/oomol-lab/spinedigest) — Want more than marginalia? SpineDigest builds chapter-level summaries, book topology, and a knowledge graph.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request. See `plans/this-is-a-forked-encapsulated-seal.md` for the architectural intent.
+- [PDF Craft](https://github.com/oomol-lab/pdf-craft) — Convert a scanned or image-based PDF into an EPUB first, then run it through Commentor.
+- [SpineDigest](https://github.com/oomol-lab/spinedigest) — Want more than margin notes? It builds chapter summaries, book structure maps, and a knowledge graph.
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details. Forked from [oomol-lab/epub-translator](https://github.com/oomol-lab/epub-translator) under the same terms.
+MIT — see [LICENSE](LICENSE). Forked from [oomol-lab/epub-translator](https://github.com/oomol-lab/epub-translator) under the same terms.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/noau/epub-commentor/issues)
+Questions or bugs? Open a [GitHub Issue](https://github.com/noau/epub-commentor/issues).

@@ -165,7 +165,7 @@ class TestZeroParagraphChapter:
                 raise AssertionError(f"LLM should not be touched: {name}")
 
         with caplog.at_level("WARNING", logger="epub_commentor.pipeline.process"):
-            anns = process_chapters([ch], book_metadata={}, llm=_BoomLLM(), config=CommentConfig())  # type: ignore[arg-type]
+            anns, _ = process_chapters([ch], book_metadata={}, llm=_BoomLLM(), config=CommentConfig())  # type: ignore[arg-type]
         assert len(anns) == 1
         assert anns[0].comments == []
         assert any("zero <p>" in rec.message for rec in caplog.records)

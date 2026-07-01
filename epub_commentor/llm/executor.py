@@ -5,6 +5,8 @@ from time import sleep
 from openai import OpenAI, omit
 from openai.types.chat import ChatCompletionMessageParam
 
+from ..errors import CommentAbortError
+from ._abort import is_abort_requested
 from .error import is_retry_error
 from .statistics import Statistics
 from .types import Message, MessageRole
@@ -61,6 +63,11 @@ class LLMExecutor:
 
         try:
             for i in range(self._retry_times + 1):
+                # Bail before even attempting the call if the user has
+                # asked to abort — saves the cost of a doomed network round-trip.
+                if is_abort_requested():
+                    raise CommentAbortError("aborted by user")
+
                 try:
                     response = self._invoke_model(
                         input_messages=messages,
@@ -71,6 +78,10 @@ class LLMExecutor:
                     if logger is not None:
                         logger.debug(f"[[Response]]:\n{response}\n")
 
+                except CommentAbortError:
+                    # Propagate without marking this attempt as a connection error.
+                    raise
+
                 except Exception as err:
                     last_error = err
                     if not is_retry_error(err):
@@ -78,7 +89,9 @@ class LLMExecutor:
                     if logger is not None:
                         logger.warning(f"request failed with connection error, retrying... ({i + 1} times)")
                     if self._retry_interval_seconds > 0.0 and i < self._retry_times:
-                        sleep(self._retry_interval_seconds)
+                        # Sleep in short slices so Ctrl-C is observed within
+                        # ~100ms even if retry_interval_seconds is large.
+                        self._interruptible_sleep(self._retry_interval_seconds)
                     continue
 
                 did_success = True
@@ -96,6 +109,23 @@ class LLMExecutor:
                 raise last_error
 
         return response
+
+    @staticmethod
+    def _interruptible_sleep(total_seconds: float, slice_seconds: float = 0.1) -> None:
+        """Sleep ``total_seconds`` in small slices, aborting on Ctrl-C.
+
+        ``time.sleep`` blocks the GIL but a SIGINT is still delivered to
+        the main thread; however our handler does not raise — it sets a
+        flag — so the sleep otherwise runs to completion. Slicing lets
+        the abort flag fire after at most one slice.
+        """
+        elapsed = 0.0
+        while elapsed < total_seconds:
+            if is_abort_requested():
+                return
+            step = min(slice_seconds, total_seconds - elapsed)
+            sleep(step)
+            elapsed += step
 
     def _input2str(self, input: str | list[Message]) -> str:
         if isinstance(input, str):
@@ -165,8 +195,24 @@ class LLMExecutor:
             extra_body=self._extra_body,
         )
         buffer = StringIO()
-        for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                buffer.write(chunk.choices[0].delta.content)
-            self._statistics.submit_usage(chunk.usage)
+        try:
+            for chunk in stream:
+                # Poll the abort flag between chunks. Even though Python
+                # delivers SIGINT to the main thread (which is what runs
+                # this loop on the worker side via ThreadPoolExecutor),
+                # the handler only sets a flag, so we still need to check.
+                if is_abort_requested():
+                    raise CommentAbortError("aborted by user")
+                if chunk.choices and chunk.choices[0].delta.content:
+                    buffer.write(chunk.choices[0].delta.content)
+                self._statistics.submit_usage(chunk.usage)
+        except CommentAbortError:
+            # Close the underlying httpx response so the server sees
+            # the connection drop instead of waiting for the full
+            # response to drain into the kernel's receive buffer.
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001 - close is best-effort
+                pass
+            raise
         return buffer.getvalue()

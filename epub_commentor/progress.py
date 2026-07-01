@@ -24,6 +24,7 @@ ownership.
 
 from __future__ import annotations
 
+import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -40,6 +41,8 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+_logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class ProgressEvent:
@@ -49,8 +52,16 @@ class ProgressEvent:
     for the process stage: ``"scan"`` advances the chapter-level
     task and resets the block task; ``"annotate"`` advances the
     block-level task. The dataclass still accepts any ``stage``
-    string for forward compatibility, but the default renderer only
-    reacts to ``"process"``.
+    string for forward compatibility. ``stage="warn"`` is the soft-skip
+    notification channel — when a Stage 1 scan or Stage 2 annotate
+    block fails and the pipeline is configured to keep going, the
+    process layer emits a warn event so the rich display can render
+    a single yellow line via ``Console.log`` (above the live progress
+    bar) without breaking the bar itself. The dataclass still accepts
+    any ``stage`` string for forward compatibility. Note: when the
+    no-op renderer is in use (quiet / non-TTY), warn events still
+    surface through the project logger so non-interactive runs see
+    soft-skip messages on stderr.
     """
 
     stage: str
@@ -64,10 +75,18 @@ ProgressCallback = Callable[[ProgressEvent], None]
 
 
 class _NoOpDisplay:
-    """Drop-in renderer used when ``quiet=True`` or stderr is not a TTY."""
+    """Drop-in renderer used when ``quiet=True`` or stderr is not a TTY.
 
-    def update(self, event: ProgressEvent) -> None:  # pragma: no cover - trivial
-        return
+    Progress events are dropped, but ``stage="warn"`` events are
+    surfaced through the project logger so non-TTY / quiet users still
+    see soft-skip messages on stderr (otherwise they'd only appear in
+    the debug log file, which most users never open).
+    """
+
+    def update(self, event: ProgressEvent) -> None:
+        if event.stage == "warn" and event.message:
+            _logger.warning(event.message)
+        # Other events: dropped (matches "no progress output" promise).
 
     def close(self) -> None:  # pragma: no cover - trivial
         return
@@ -126,6 +145,16 @@ class RichProgressDisplay:
         self._block_task = self._progress.add_task("—", total=None, visible=True)
 
     def update(self, event: ProgressEvent) -> None:
+        if event.stage == "warn":
+            self._ensure_started()
+            console = self._console
+            if console is not None and event.message:
+                # Console.log renders above the Live region; safe to call
+                # while the progress bar is alive. Style with a yellow
+                # ⚠ prefix so soft-skip messages stand out from the bar.
+                console.log(f"[yellow]⚠[/yellow] [bold yellow]{event.message}[/bold yellow]")
+            return
+
         if event.stage != "process":
             return
 

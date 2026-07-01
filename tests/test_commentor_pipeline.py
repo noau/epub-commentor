@@ -22,7 +22,8 @@ from _mock_llm import MockLLM, json_dumps
 
 from epub_commentor import comment_epub
 from epub_commentor.config import CommentConfig
-from epub_commentor.errors import CommentInvalidJSONError
+from epub_commentor.errors import CommentInvalidJSONError, CommentScanFailedError
+from epub_commentor.llm.memo import scan_chapter
 from epub_commentor.pipeline.extract import Chapter
 from epub_commentor.pipeline.process import ChapterAnnotation, process_chapters
 from epub_commentor.progress import ProgressEvent
@@ -61,8 +62,9 @@ class TestProcessChapters:
                 ),
             }
         )
-        anns = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
+        anns, blocks_skipped = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
         assert len(anns) == 1
+        assert blocks_skipped == 0
         ann = anns[0]
         assert isinstance(ann, ChapterAnnotation)
         assert ann.memo.core_thesis == "x"
@@ -82,7 +84,7 @@ class TestProcessChapters:
                 ),
             }
         )
-        anns = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig(block_size=4))
+        anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig(block_size=4))
         # Both blocks return one comment; the block-0 comment is at p0,
         # the block-1 comment is at p4 (absolute).
         abs_pids = sorted(c.target_p_ids[0] for c in anns[0].comments)
@@ -104,7 +106,7 @@ class TestProcessChapters:
                 ),
             }
         )
-        anns = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig(block_size=4))
+        anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig(block_size=4))
         # 2 comments (one per block), sorted by absolute p_id
         abs_pids = [c.target_p_ids[0] for c in anns[0].comments]
         assert abs_pids == [0, 4]
@@ -112,6 +114,8 @@ class TestProcessChapters:
         assert all(c.content == "samelabel" for c in anns[0].comments)
 
     def test_invalid_block_raises_invalid_json(self) -> None:
+        """When ``fail_on_block_error=True``, Stage 2 retry exhaustion
+        still raises ``CommentInvalidJSONError`` (legacy behaviour)."""
         chapter = _mk_chapter(2)
         llm = MockLLM(
             responses_by_seed={
@@ -120,16 +124,159 @@ class TestProcessChapters:
             default_response="not json",
         )
         with pytest.raises(CommentInvalidJSONError):
-            process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig(max_json_retries=2))
+            process_chapters(
+                [chapter],
+                book_metadata={},
+                llm=llm,
+                config=CommentConfig(max_json_retries=2, fail_on_block_error=True),
+            )
+
+    def test_invalid_block_skipped_by_default(self) -> None:
+        """When ``fail_on_block_error=False`` (default), Stage 2 retry
+        exhaustion is logged and the block is skipped; the chapter is
+        returned with an empty comments list and ``blocks_skipped == 1``."""
+        chapter = _mk_chapter(2)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+            },
+            default_response="not json",
+        )
+        anns, blocks_skipped = process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(max_json_retries=2),
+        )
+        assert len(anns) == 1
+        assert blocks_skipped == 1
+        assert anns[0].comments == []
+        # memo is still the real Stage 1 result (the chapter was scanned
+        # successfully; only Stage 2 failed)
+        assert not anns[0].memo.core_thesis.startswith("(chapter skipped")
 
     def test_empty_chapter_skipped_by_default(self) -> None:
         # 0 paragraphs
         chapter = _mk_chapter(0)
         llm = MockLLM()  # nothing should be called
-        anns = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
+        anns, blocks_skipped = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
         assert len(anns) == 1
+        assert blocks_skipped == 0
         assert anns[0].comments == []
         assert anns[0].memo.core_thesis.startswith("(chapter skipped")
+
+    def test_scan_failure_skipped_by_default(self) -> None:
+        """When Stage 1 returns malformed JSON and
+        ``fail_on_block_error=False``, the chapter is marked as skipped
+        (via the same placeholder memo the zero-<p> path uses) so it
+        counts in ``chapters_skipped``."""
+        chapter = _mk_chapter(3)
+        llm = MockLLM(default_response="not json")
+        anns, blocks_skipped = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
+        assert len(anns) == 1
+        assert blocks_skipped == 0
+        assert anns[0].comments == []
+        assert anns[0].memo.core_thesis.startswith("(chapter skipped")
+
+    def test_scan_failure_retries_then_skips(self) -> None:
+        """scan_chapter should now honour ``config.max_scan_retries``:
+        after retries are exhausted, the soft-skip path produces a
+        sentinel annotation (chapters_skipped += 1)."""
+        chapter = _mk_chapter(3)
+        llm = MockLLM(default_response="not json")
+        anns, blocks_skipped = process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(max_scan_retries=2),
+        )
+        assert len(anns) == 1
+        assert blocks_skipped == 0
+        assert anns[0].comments == []
+        assert anns[0].memo.core_thesis.startswith("(chapter skipped")
+
+    def test_skip_chapter_on_empty_annotation_triggers_on_block_failure(self) -> None:
+        """With ``skip_chapter_on_empty_annotation=True``, a single block
+        failure taints the whole chapter — it's marked as skipped so the
+        user can re-run with --interactive to retry just this chapter."""
+        chapter = _mk_chapter(2)
+        llm = MockLLM(
+            responses_by_seed={"scan__response": _memo_json()},
+            default_response="not json",
+        )
+        anns, blocks_skipped = process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(max_json_retries=1, skip_chapter_on_empty_annotation=True),
+        )
+        assert len(anns) == 1
+        # block failed; even though blocks_skipped still counts the failure,
+        # the whole chapter is also marked skipped for retry purposes.
+        assert blocks_skipped == 1
+        assert anns[0].comments == []
+        assert anns[0].memo.core_thesis.startswith("(chapter skipped")
+
+    def test_skip_chapter_on_empty_annotation_triggers_on_empty_block(self) -> None:
+        """With ``skip_chapter_on_empty_annotation=True``, a successful
+        block that returns an empty ``comments`` list also taints the
+        whole chapter."""
+        chapter = _mk_chapter(2)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps({"comments": []}),
+            },
+        )
+        anns, blocks_skipped = process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(skip_chapter_on_empty_annotation=True),
+        )
+        assert len(anns) == 1
+        assert blocks_skipped == 0  # no block "failed", just returned empty
+        assert anns[0].comments == []
+        assert anns[0].memo.core_thesis.startswith("(chapter skipped")
+
+    def test_skip_chapter_on_empty_annotation_default_keeps_partial_success(self) -> None:
+        """Without the flag, a partial-success chapter (some blocks
+        succeed, some fail) keeps its successful comments and is NOT
+        marked as skipped."""
+        # 8 paragraphs at block_size=4 → 2 blocks. Block 0 fails; block 1
+        # succeeds with one comment. Without the new flag, the chapter
+        # ends up with one comment, not a skipped sentinel.
+        chapter = _mk_chapter(8)
+
+        call_counter = {"n": 0}
+
+        def flaky_route(seed, messages):
+            # First annotate call returns garbage; subsequent ones succeed.
+            if ":annotate:" in seed and call_counter["n"] == 0:
+                call_counter["n"] += 1
+                return "not json"
+            if ":annotate:" in seed:
+                return json_dumps(
+                    {"comments": [{"target_p_ids": [0], "position": "before", "kind": "note", "content": "ok"}]}
+                )
+            # scan path
+            return _memo_json()
+
+        llm = MockLLM(responses_by_seed={"scan__response": _memo_json()})
+        llm._route = flaky_route  # type: ignore[assignment]
+
+        anns, blocks_skipped = process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(max_json_retries=1, block_size=4),
+        )
+        assert len(anns) == 1
+        assert blocks_skipped == 1
+        # Without skip_chapter_on_empty_annotation, the chapter keeps
+        # the partial success and is NOT marked skipped.
+        assert anns[0].comments != []
+        assert not anns[0].memo.core_thesis.startswith("(chapter skipped")
 
 
 class TestProgressEvents:
@@ -203,7 +350,7 @@ class TestProgressEvents:
             raise RuntimeError("boom")
 
         # Should not raise; the callback error is logged + swallowed.
-        anns = process_chapters(
+        anns, _ = process_chapters(
             [chapter],
             book_metadata={},
             llm=llm,
@@ -222,8 +369,69 @@ class TestProgressEvents:
                 ),
             }
         )
-        anns = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
+        anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
         assert len(anns) == 1
+
+    def test_warn_events_emitted_on_block_skip(self) -> None:
+        """When a Stage 2 block fails and ``fail_on_block_error=False``,
+        a ``stage="warn"`` event is emitted to the progress callback
+        (which the rich display renders via ``Console.log``)."""
+        chapter = _mk_chapter(2)
+        llm = MockLLM(
+            responses_by_seed={"scan__response": _memo_json()},
+            default_response="not json",
+        )
+        events: list[ProgressEvent] = []
+        process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(max_json_retries=1),
+            progress_callback=events.append,
+        )
+        warn_events = [e for e in events if e.stage == "warn"]
+        assert len(warn_events) == 1
+        assert "block" in (warn_events[0].message or "")
+        # The warn message must include the exception class name so the
+        # user can see *why* the block was skipped without opening the
+        # debug log file.
+        assert "CommentInvalidJSONError" in warn_events[0].message
+
+    def test_warn_event_emitted_on_empty_chapter(self) -> None:
+        """An empty chapter (zero <p>) emits a ``stage="warn"`` event
+        so rich users see the skip (it previously only logged to the
+        Python logger)."""
+        chapter = _mk_chapter(0)
+        llm = MockLLM()  # nothing should be called
+        events: list[ProgressEvent] = []
+        process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(),
+            progress_callback=events.append,
+        )
+        warn_events = [e for e in events if e.stage == "warn"]
+        assert len(warn_events) == 1
+        assert "<p>" in (warn_events[0].message or "")
+
+    def test_warn_event_emitted_on_scan_failure(self) -> None:
+        """A Stage 1 scan failure emits a warn event whose message
+        includes the underlying exception class name."""
+        chapter = _mk_chapter(3)
+        llm = MockLLM(default_response="not json")
+        events: list[ProgressEvent] = []
+        process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(max_scan_retries=1),
+            progress_callback=events.append,
+        )
+        warn_events = [e for e in events if e.stage == "warn"]
+        assert len(warn_events) == 1
+        assert "scan failed" in warn_events[0].message
+        assert "CommentScanFailedError" in warn_events[0].message
 
 
 class TestChapterFilter:
@@ -354,3 +562,151 @@ class TestChapterFilter:
             chapter_filter=_record,
         )
         assert seen == [c.path.as_posix() for c in original]
+
+
+class TestScanChapter:
+    """Direct unit tests for :func:`epub_commentor.llm.memo.scan_chapter`.
+
+    Mirrors ``TestAnnotateBlock``'s retry contract: scan_chapter should
+    honour ``config.max_scan_retries``, recover when the LLM produces
+    valid JSON on a later attempt, and raise ``CommentScanFailedError``
+    only after all retries are exhausted.
+    """
+
+    def test_retry_recovers_after_invalid_response(self) -> None:
+        chapter = _mk_chapter(2)
+        llm = MockLLM(responses_by_seed={"scan__response": _memo_json()})
+        real_route = llm._route
+        calls = {"n": 0}
+
+        def flaky_route(seed, messages):
+            if ":scan:" in seed:
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return "not json"
+            return real_route(seed, messages)
+
+        llm._route = flaky_route  # type: ignore[assignment]
+
+        memo = scan_chapter(
+            body=chapter.body,
+            chapter_path=chapter.path,
+            chapter_title=chapter.title,
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(max_scan_retries=3),
+        )
+        assert memo.core_thesis == "x"
+        assert calls["n"] == 2  # 1 bad + 1 good
+
+    def test_retry_exhausted_raises_scan_failed(self) -> None:
+        chapter = _mk_chapter(2)
+        llm = MockLLM(default_response="not json")
+        with pytest.raises(CommentScanFailedError):
+            scan_chapter(
+                body=chapter.body,
+                chapter_path=chapter.path,
+                chapter_title=chapter.title,
+                book_metadata={},
+                llm=llm,
+                config=CommentConfig(max_scan_retries=2),
+            )
+
+
+class TestChapterAnnotationFields:
+    """Per-chapter ``skipped_blocks`` / ``has_empty_blocks`` fields.
+
+    These two counters are surfaced to the post-process review gate so the
+    user can see how many Stage 2 blocks failed JSON validation
+    (``skipped_blocks``) versus returned a valid-but-empty
+    ``{"comments": []}`` response (``has_empty_blocks``). Both default to
+    0; both should be set on the ``ChapterAnnotation`` regardless of
+    whether ``config.skip_chapter_on_empty_annotation`` is True.
+    """
+
+    def test_skipped_blocks_populated_on_json_failure(self) -> None:
+        """``skipped_blocks`` is incremented when a Stage 2 block's JSON
+        validation exhausts retries."""
+        chapter = _mk_chapter(2)
+        llm = MockLLM(
+            responses_by_seed={"scan__response": _memo_json()},
+            default_response="not json",
+        )
+        anns, _ = process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(max_json_retries=2),
+        )
+        assert anns[0].skipped_blocks == 1
+        # Empty LLM responses don't fire here — only JSON-validation
+        # failures do.
+        assert anns[0].has_empty_blocks == 0
+
+    def test_has_empty_blocks_populated_on_empty_response(self) -> None:
+        """``has_empty_blocks`` is incremented when Stage 2 returns a valid
+        but empty ``{"comments": []}`` response (no JSON validation
+        error)."""
+        chapter = _mk_chapter(2)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps({"comments": []}),
+            },
+        )
+        anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
+        assert anns[0].comments == []
+        # Empty response, no failure — the field should still fire because
+        # the LLM produced nothing usable.
+        assert anns[0].has_empty_blocks == 1
+        assert anns[0].skipped_blocks == 0
+
+    def test_both_counters_default_zero_on_clean_run(self) -> None:
+        """A clean Stage 2 run leaves both counters at 0."""
+        chapter = _mk_chapter(2)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps(
+                    {"comments": [{"target_p_ids": [0], "position": "before", "kind": "note", "content": "x"}]}
+                ),
+            },
+        )
+        anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
+        assert anns[0].skipped_blocks == 0
+        assert anns[0].has_empty_blocks == 0
+
+    def test_empty_chapter_bypasses_stage_two(self) -> None:
+        """Chapters with zero ``<p>`` skip Stage 2 entirely; both
+        counters should remain 0 (the chapter is counted in
+        ``chapters_skipped`` via the placeholder memo instead)."""
+        chapter = _mk_chapter(0)
+        llm = MockLLM()
+        anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
+        assert anns[0].skipped_blocks == 0
+        assert anns[0].has_empty_blocks == 0
+        assert anns[0].memo.core_thesis.startswith("(chapter skipped")
+
+    def test_counters_preserved_when_skip_chapter_on_empty(self) -> None:
+        """When ``skip_chapter_on_empty_annotation=True`` taints a
+        chapter, the per-chapter counters must still be populated on
+        the (now-empty-comments) annotation so the review gate can show
+        them."""
+        chapter = _mk_chapter(2)
+        llm = MockLLM(
+            responses_by_seed={"scan__response": _memo_json()},
+            default_response="not json",
+        )
+        anns, _ = process_chapters(
+            [chapter],
+            book_metadata={},
+            llm=llm,
+            config=CommentConfig(max_json_retries=2, skip_chapter_on_empty_annotation=True),
+        )
+        # Comments cleared because the chapter was tainted, but the
+        # counter survives.
+        assert anns[0].comments == []
+        assert anns[0].skipped_blocks == 1
+        assert anns[0].has_empty_blocks == 0
+        # Placeholder memo still applies.
+        assert anns[0].memo.core_thesis.startswith("(chapter skipped")

@@ -8,6 +8,6 @@
   "retry_interval_seconds": 6.0,
   "temperature": 0.4,
   "top_p": 0.9,
-  "log_dir_path": null,
-  "debug": false
+  "cache_path": "./commentary_cache",
+  "log_dir_path": null
 }

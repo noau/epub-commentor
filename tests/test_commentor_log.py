@@ -68,7 +68,7 @@ class TestStageErrorLogging:
                 [chapter],
                 book_metadata={},
                 llm=llm,
-                config=CommentConfig(max_json_retries=2),
+                config=CommentConfig(max_json_retries=2, fail_on_block_error=True),
             )
 
         # Scan creates its own mock-request *.log; annotate creates
@@ -98,7 +98,7 @@ class TestStageErrorLogging:
                 [chapter],
                 book_metadata={},
                 llm=llm,
-                config=CommentConfig(max_json_retries=1),
+                config=CommentConfig(max_json_retries=1, fail_on_block_error=True),
             )
 
         log_text = _collect_log_text(log_dir)

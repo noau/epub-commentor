@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from ..config import CommentConfig
 from ..errors import CommentInvalidJSONError, CommentOrphanPIdError, CommentOverlapError
+from ._salvage import salvage_block_annotations
 from .protocol import LLMProtocol
 from .schema import BlockAnnotation, ChapterMemo, validate_block_annotations
 from .types import Message, MessageRole
@@ -158,6 +159,11 @@ def annotate_block(
     )
 
     last_error: Exception | None = None
+    # Last successfully-parsed BlockAnnotation (model_validate_json passed
+    # but the semantic validator threw). We keep it around so the
+    # post-retry salvage pass has something to recover from when the LLM
+    # returned a mostly-good response with a few broken comments.
+    last_parsed: BlockAnnotation | None = None
 
     try:
         with llm.context(cache_seed_content=seed) as ctx:
@@ -172,6 +178,14 @@ def annotate_block(
                     return validate_block_annotations(parsed, block_size=len(block_ps))
                 except (ValidationError, CommentOrphanPIdError, CommentOverlapError) as exc:
                     last_error = exc
+                    # model_validate_json may have failed (raw was not
+                    # even valid JSON) — in that case we don't have a
+                    # parsed object to feed the salvage pass.
+                    if not isinstance(exc, ValidationError):
+                        try:
+                            last_parsed = BlockAnnotation.model_validate_json(raw)
+                        except ValidationError:
+                            last_parsed = None
                     if ctx.logger is not None:
                         ctx.logger.warning(
                             f"[[StageError]] stage=annotate; "
@@ -183,6 +197,25 @@ def annotate_block(
                         break
                     messages.append(Message(MessageRole.ASSISTANT, raw))
                     messages.append(Message(MessageRole.USER, _format_validation_error(exc, raw)))
+
+            # Retries exhausted: last line of defense. Salvage whatever
+            # is recoverable from the most recent parsed object — this
+            # rescues blocks where the LLM produced e.g. 5 valid
+            # comments plus 1 with non-contiguous p_ids. We do NOT
+            # salvage during retries: the LLM should still be given a
+            # chance to fix itself, and salvage silently drops bad
+            # comments so we'd never see them in a corrective prompt.
+            if last_parsed is not None:
+                salvaged = salvage_block_annotations(last_parsed, block_size=len(block_ps))
+                if salvaged is not None:
+                    if ctx.logger is not None:
+                        ctx.logger.warning(
+                            f"[[PartialSalvage]] stage=annotate; "
+                            f"original={len(last_parsed.comments)}; "
+                            f"kept={len(salvaged)}; "
+                            f"dropped={len(last_parsed.comments) - len(salvaged)}\n"
+                        )
+                    return salvaged
     finally:
         _strip_data_p_ids(block_ps)
 

@@ -132,7 +132,14 @@ def _run_case(case_path: Path) -> CaseResult:
     case = json.loads(case_path.read_text(encoding="utf-8"))
     case_id = case.get("id", case_path.stem)
     chapter = _build_chapter(case)
-    config = CommentConfig(block_size=case["block_size"])
+    # Cases that pin an expected_error (e.g. case08) need the legacy
+    # raise-on-retry-exhaustion behaviour so the assertion fires. Other
+    # cases run with the soft-skip default.
+    expected_error = case.get("expected_error")
+    config = CommentConfig(
+        block_size=case["block_size"],
+        fail_on_block_error=bool(expected_error),
+    )
     llm = _build_llm(case)
 
     expected_error = case.get("expected_error")
@@ -155,7 +162,7 @@ def _run_case(case_path: Path) -> CaseResult:
         return CaseResult(case_id=case_id, passed=False, detail=f"expected {expected_error} to be raised, got success")
 
     try:
-        anns = process_chapters([chapter], book_metadata={}, llm=llm, config=config)
+        anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=config)
     except CommentorError as exc:
         return CaseResult(case_id=case_id, passed=False, detail=f"unexpected error: {type(exc).__name__}: {exc}")
 

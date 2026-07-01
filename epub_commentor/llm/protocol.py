@@ -14,6 +14,7 @@ requires an executor, cache path and Increasable).
 
 from __future__ import annotations
 
+from logging import Logger
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -34,6 +35,9 @@ class ContextProtocol(Protocol):
     ) -> None: ...
 
     def request(self, input: Any = None, **kwargs: Any) -> str: ...
+
+    @property
+    def logger(self) -> Logger | None: ...
 
 
 class LLMProtocol(Protocol):

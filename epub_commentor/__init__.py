@@ -10,6 +10,7 @@ third-party tools) can import everything from the top level.
 from .commentor import CommentorResult, comment_epub
 from .config import CommentConfig
 from .errors import (
+    CommentAbortError,
     CommentInvalidJSONError,
     CommentNoParagraphsError,
     CommentorError,
@@ -19,6 +20,7 @@ from .errors import (
 )
 from .llm import LLM, Message, MessageRole
 from .pipeline import (
+    AnnotationFilter,
     Chapter,
     ChapterAnnotation,
     ChapterFilter,
@@ -27,9 +29,11 @@ from .pipeline import (
 from .progress import ProgressCallback, ProgressEvent, make_default_progress_callback
 
 __all__ = [
+    "AnnotationFilter",
     "Chapter",
     "ChapterAnnotation",
     "ChapterFilter",
+    "CommentAbortError",
     "CommentConfig",
     "CommentInvalidJSONError",
     "CommentNoParagraphsError",

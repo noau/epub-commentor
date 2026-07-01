@@ -41,6 +41,8 @@ class CommentConfig:
     css_path_in_epub: Path = field(default_factory=lambda: Path("Styles/commentary.css"))
     target_language: str = "Chinese"
     fail_on_empty_chapter: bool = False
+    fail_on_block_error: bool = False
+    skip_chapter_on_empty_annotation: bool = False
 
 
 __all__ = ["CommentConfig"]

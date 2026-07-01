@@ -7,6 +7,8 @@ from logging import Logger
 from pathlib import Path
 from typing import Self
 
+from ..errors import CommentAbortError
+from ._abort import is_abort_requested
 from .executor import LLMExecutor
 from .increasable import Increasable, Increaser
 from .types import Message, MessageRole
@@ -73,6 +75,11 @@ class LLMContext:
         temperature: float | None = None,
         top_p: float | None = None,
     ) -> str:
+        # Short-circuit before doing any work: if the user has asked
+        # to abort, the executor would only see a wasted network call.
+        if is_abort_requested():
+            raise CommentAbortError("aborted by user")
+
         messages: list[Message]
         if isinstance(input, str):
             messages = [Message(role=MessageRole.USER, message=input)]

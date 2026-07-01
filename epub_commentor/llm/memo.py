@@ -9,6 +9,13 @@ Stage 1 is **sequential across chapters** (one chapter at a time) but each
 chapter is self-contained, so a single :class:`LLMContext` is sufficient.
 Cache key is namespaced so swapping the prompt or the user re-derives the
 whole chapter set.
+
+Retry loop mirrors the Stage 2 contract in :mod:`epub_commentor.llm.block`:
+on a malformed JSON response, the bad turn plus a corrective user message
+is appended and the LLM is asked again, up to ``config.max_scan_retries``
+times. Per-attempt failures are logged as ``[[StageError]]``; the final
+exhaustion is logged as ``[[FinalError]]`` and raised as
+:class:`~epub_commentor.errors.CommentScanFailedError`.
 """
 
 import hashlib
@@ -52,6 +59,22 @@ def _format_scan_user(
     )
 
 
+def _raw_excerpt(raw: str, limit: int = 400) -> str:
+    """Truncated raw response used for [[StageError]] log sections."""
+    return raw[:limit] + ("…" if len(raw) > limit else "")
+
+
+def _format_validation_error(error: Exception, raw: str) -> str:
+    raw_excerpt = raw[:400] + ("…" if len(raw) > 400 else "")
+    return (
+        "Your previous response could not be parsed as valid ChapterMemo JSON.\n"
+        f"Error: {error}\n\n"
+        "Raw response (truncated):\n"
+        f"```\n{raw_excerpt}\n```\n\n"
+        "Please reply with ONLY the corrected JSON object conforming to the schema."
+    )
+
+
 def scan_chapter(
     body: Element,
     chapter_path: Path,
@@ -65,6 +88,8 @@ def scan_chapter(
     The body element is only read (``plain_text``) — its DOM is never mutated
     here. ``chapter_path`` is used purely as a stable identifier for caching;
     no file I/O happens against it.
+
+    Retries up to ``config.max_scan_retries`` times on malformed JSON.
     """
     seed = _scan_seed(config, chapter_path)
 
@@ -78,26 +103,41 @@ def scan_chapter(
         chapter_full_text=plain_text(body),
     )
 
-    raw: str
-    with llm.context(cache_seed_content=seed) as ctx:
-        raw = ctx.request(
-            [
-                Message(MessageRole.SYSTEM, system_text),
-                Message(MessageRole.USER, user_text),
-            ]
-        )
+    messages: list[Message] = [
+        Message(MessageRole.SYSTEM, system_text),
+        Message(MessageRole.USER, user_text),
+    ]
+    last_error: Exception | None = None
 
-    try:
-        return ChapterMemo.model_validate_json(raw)
-    except ValidationError as error:
-        if ctx.logger is not None:
-            excerpt = raw[:400] + ("…" if len(raw) > 400 else "")
-            ctx.logger.error(
-                f"[[StageError]] stage=scan; attempt=1; error=ValidationError: {error}\nRaw excerpt:\n{excerpt}\n"
-            )
-        raise CommentScanFailedError(
-            f"Stage 1 (scan) returned invalid ChapterMemo JSON for {chapter_path.as_posix()}: {error}"
-        ) from error
+    with llm.context(cache_seed_content=seed) as ctx:
+        for retry in range(config.max_scan_retries):
+            raw = ctx.request(messages)
+            try:
+                return ChapterMemo.model_validate_json(raw)
+            except ValidationError as exc:
+                last_error = exc
+                if ctx.logger is not None:
+                    ctx.logger.warning(
+                        f"[[StageError]] stage=scan; "
+                        f"attempt={retry + 1}/{config.max_scan_retries}; "
+                        f"error={type(exc).__name__}: {exc}\n"
+                        f"Raw excerpt:\n{_raw_excerpt(raw)}\n"
+                    )
+                if retry == config.max_scan_retries - 1:
+                    break
+                messages.append(Message(MessageRole.ASSISTANT, raw))
+                messages.append(Message(MessageRole.USER, _format_validation_error(exc, raw)))
+
+    assert last_error is not None  # always set when we exit the retry loop without returning
+    if ctx.logger is not None:
+        ctx.logger.error(
+            f"[[FinalError]] stage=scan; attempts_exhausted=true; "
+            f"exception={type(last_error).__name__}: {last_error}\n"
+        )
+    raise CommentScanFailedError(
+        f"Stage 1 (scan) returned invalid ChapterMemo JSON for "
+        f"{chapter_path.as_posix()} after {config.max_scan_retries} attempts: {last_error}"
+    ) from last_error
 
 
 __all__ = ["scan_chapter"]
