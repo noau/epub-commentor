@@ -80,26 +80,44 @@ class TestCommentaryCss:
         assert "font-style" not in block, f"italic must be removed by Part IX #6; got: {block!r}"
 
     def test_kind_left_border_hierarchy(self) -> None:
-        """Companion visual hierarchy: note ≤ summary in left-border weight.
+        """Companion visual hierarchy, carried by line style rather than width.
 
-        intro = thinnest (lighter-weight marker), note = mid-weight (margin
-        scribble), summary = heaviest (clearer recap). The note kind is
-        allowed to equal intro (both 3px) — the dashed/solid distinction
-        carries the difference — but summary must be the heaviest.
+        All three kinds share the same 5px left-rule width so the rules align
+        vertically on the page (mixing 2/3/5px previously caused the rules to
+        land at different x-offsets). The hierarchy is now:
+          intro   = dashed  (lightest marker)
+          note    = double  (mid-weight pencil mark)
+          summary = solid   (heaviest recap)
         """
         import re
 
         css = _read_data_file()
 
-        def first_px_in_border_left(selector: str) -> int:
+        def first_border_left(selector: str) -> tuple[int, str]:
             block = _selector_block(css, selector)
-            # Prefer the border-left shorthand's first px
-            m = re.search(r"border-left[^:]*:\s*\D*?(\d+)px", block)
-            assert m, f"no px width in {selector} block: {block!r}"
-            return int(m.group(1))
+            # border-left shorthand: <width> <style> <color>
+            m = re.search(
+                r"border-left[^:]*:\s*\D*?(\d+)px\s+(\w+)", block
+            )
+            assert m, f"no border-left shorthand in {selector} block: {block!r}"
+            return int(m.group(1)), m.group(2)
 
-        intro_px = first_px_in_border_left(".commentary-intro")
-        note_px = first_px_in_border_left(".commentary-note")
-        summary_px = first_px_in_border_left(".commentary-summary")
-        assert intro_px <= note_px, f"intro ({intro_px}px) should not exceed note ({note_px}px)"
-        assert note_px <= summary_px, f"note ({note_px}px) should not exceed summary ({summary_px}px)"
+        intro_px, intro_style = first_border_left(".commentary-intro")
+        note_px, note_style = first_border_left(".commentary-note")
+        summary_px, summary_style = first_border_left(".commentary-summary")
+
+        # Width invariant: all three are 5px so the rules align vertically.
+        assert intro_px == note_px == summary_px == 5, (
+            f"all three kinds must share the same 5px left-rule width "
+            f"for vertical alignment; got intro={intro_px}px, "
+            f"note={note_px}px, summary={summary_px}px"
+        )
+
+        # Line-style invariant: each kind uses a distinct style so the
+        # hierarchy is still readable when widths are equal.
+        styles = {intro_style, note_style, summary_style}
+        assert len(styles) == 3, (
+            f"the three kinds must use three distinct line styles to carry "
+            f"the visual hierarchy; got intro={intro_style!r}, "
+            f"note={note_style!r}, summary={summary_style!r}"
+        )
