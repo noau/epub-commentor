@@ -99,7 +99,7 @@ print(f"total tokens:       {result.total_tokens}")
 
 ### With progress tracking
 
-The CLI installs a two-row `tqdm` bar by default — outer chapter progress, inner per-block progress within the current chapter. `extract` and `inject` print single status lines via `tqdm.write()`.
+The CLI installs a `rich` `Progress` by default — two stacked task rows share the same frame: the top row tracks chapter progress (`Ch. 3/28: Title` + `3/28` + ETA), the bottom row tracks block progress within the current chapter (`(block 12/24)` + `12/24` + ETA). Each row has its own spinner, bar, and count. `extract` and `inject` print single status lines to stderr.
 
 For programmatic use, install the same renderer explicitly or roll your own:
 
@@ -115,7 +115,7 @@ from epub_commentor import (
 llm = LLM(...)
 config = CommentConfig(...)
 
-# Default renderer: two tqdm bars on stderr (use quiet=True to suppress).
+# Default renderer: a rich Progress on stderr with two stacked task rows (use quiet=True to suppress).
 progress = make_default_progress_callback(quiet=False)
 result = comment_epub(source="book.epub", llm=llm, config=config, progress_callback=progress)
 ```
@@ -130,7 +130,7 @@ result = comment_epub(source="book.epub", llm=llm, config=config, progress_callb
 | `message` | `str \| None` | Free-form description (e.g. chapter title). |
 
 ```python
-# Custom renderer example: log every event instead of using tqdm.
+# Custom renderer example: log every event instead of using the default bar.
 def log_progress(event: ProgressEvent) -> None:
     label = event.substage or event.stage
     print(f"[{label}] {event.current}/{event.total}  {event.message or ''}")
@@ -242,7 +242,7 @@ poetry run epub-commentor path/to/source.epub --synopsis "..." -i
 
 After the EPUB is parsed, a checkbox list of all chapters appears. Use `space` to toggle, `a` to select all, `i` to invert, `enter` to confirm. Chapters with zero `<p>` elements (cover pages, nav documents, image-only sections) are pre-deselected so a user can press `enter` to skip them all at once.
 
-When `-i` is set, the tqdm progress bars are automatically suppressed — questionary owns the terminal. The flag requires a TTY: piping the source through stdin exits with code `2`.
+When `-i` is set, the progress bar is automatically suppressed — questionary owns the terminal. The flag requires a TTY: piping the source through stdin exits with code `2`.
 
 ## Configuration
 

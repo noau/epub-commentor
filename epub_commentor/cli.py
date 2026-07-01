@@ -366,17 +366,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     chapter_filter = _build_chapter_filter(args)
 
     try:
-        result = comment_epub(
-            source=args.source,
-            output=args.output,
-            llm=llm,
-            config=config,
-            progress_callback=progress_callback,
-            chapter_filter=chapter_filter,
-        )
-    except CommentorError as exc:
-        print(f"commentor failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
+        try:
+            result = comment_epub(
+                source=args.source,
+                output=args.output,
+                llm=llm,
+                config=config,
+                progress_callback=progress_callback,
+                chapter_filter=chapter_filter,
+            )
+        except CommentorError as exc:
+            print(f"commentor failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+    finally:
+        # rich Progress context must be exited explicitly; _NoOpDisplay.close() is a no-op.
+        # __self__ access works at runtime (callbacks are bound methods); pyright sees
+        # the type as FunctionType, hence the ignore.
+        progress_callback.__self__.close()  # type: ignore[attr-defined]
 
     if not args.quiet:
         _print_summary(result, args.source)

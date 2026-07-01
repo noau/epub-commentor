@@ -89,7 +89,7 @@ poetry run pyright epub_commentor
 - LLM：`LLM`、`Message`、`MessageRole`
 - 配置 / 数据类：`CommentConfig`、`CommentKind`、`CommentPosition`、`ChapterAnnotation`、`CommentorResult`
 - 顶层编排：`comment_epub(source, output, llm, config, progress_callback, chapter_filter) -> CommentorResult`（阶段汇报顺序：`extract` → `process` → `inject`；`chapter_filter` 可选，详见下文）
-- 进度回调：`ProgressCallback`（`Callable[[ProgressEvent], None]`）+ `ProgressEvent` dataclass + `make_default_progress_callback(quiet)` 工厂；CLI 默认装一个 `tqdm` 双层 bar 渲染器
+- 进度回调：`ProgressCallback`（`Callable[[ProgressEvent], None]`）+ `ProgressEvent` dataclass + `make_default_progress_callback(quiet)` 工厂；CLI 默认装一个 `rich.progress.Progress` 渲染器，**单实例 + 两 TaskID** 垂直堆叠（chapter task 顶行 + block task 底行，每行独立 spinner + bar + M/N + ETA）
 - 章节过滤回调：`ChapterFilter`（`Callable[[list[Chapter]], list[bool]]`）— 返回与 spine 顺序等长的 bool mask，`True` 保留、`False` 跳过；CLI 在 `-i`/`--interactive` 下弹 questionary checkbox 多选
 - 提取 / 注入：`Chapter`、`extract_chapters`（pipeline 内）、`inject_annotations`（pipeline 内）
 - 异常：`CommentorError(ValueError)` + 五个子类（`CommentInvalidJSONError`、`CommentOrphanPIdError`、`CommentOverlapError`、`CommentScanFailedError`、`CommentNoParagraphsError`）
@@ -116,7 +116,7 @@ poetry run pyright epub_commentor
   - `memo.py`（[已实现]）— Stage 1 全章扫读封装（拼 system + user 消息、走 `LLMContext`、pydantic 校验 → `ChapterMemo`；校验失败抛 `CommentScanFailedError` 并写 `[[StageError]]`）
   - `block.py`（[已实现]）— Stage 2 块级批注封装（切组 + 打 `data-p-id` + multi-turn retry 循环 + `finally` 块清除 `data-p-id`；穷尽 `max_json_retries` 抛 `CommentInvalidJSONError`，每次 retry 写 `[[StageError]]` / 最终 `[[FinalError]]`）
 
-- **`epub_commentor/progress.py`**（[已实现] M7a）— 进度渲染器：`ProgressEvent` dataclass + `TqdmProgressDisplay` 双层 bar（章节外层 + 块内层）+ `_NoOpDisplay`（quiet）+ `make_default_progress_callback(quiet)` 工厂
+- **`epub_commentor/progress.py`**（[已实现]）— 进度渲染器（rich 后端）：`ProgressEvent` dataclass + `RichProgressDisplay`（单 `Progress` 实例 + `chapter_task` + `block_task` 两 `TaskID`，列：`SpinnerColumn · TextColumn · BarColumn · MofNCompleteColumn · TimeRemainingColumn`，`transient=False` 停在 100%）+ `_NoOpDisplay`（quiet 或非 TTY）+ `make_default_progress_callback(quiet)` 工厂；底层依赖 `rich.progress`
 
 - **`epub_commentor/pipeline/`**（[已实现]）
   - `extract.py` — 提取层：`Zip.open` → 读 spine → 逐章 `XMLLikeNode.parse` → 拿到 `body_element` + 扁平化 `dict[str, str]` metadata（含保留键 `__opf_path__` 留给 inject 用）+ 每章 `Chapter`
@@ -188,7 +188,7 @@ EPUB Commentor 把 AI 评注定位为**页边的陪伴者**，而不是居高临
 
 - **段落临时 id** — Stage 2 切组时给块内每个 `<p>` 加 `data-p-id="0..N"`，LLM 只能引用批内局部索引；`annotate_block` 在 `finally` 里清一次，注入层再防御性 strip 一次。`cmt-...` 评注 id 命名空间避免与原书 id 冲突；`inject_chapter` 末尾调 `deduplicate_ids_in_element`。
 
-- **进度回调契约 (`ProgressEvent`)** — `Callable[[ProgressEvent], None]`；`stage ∈ {"extract", "process", "inject"}`、`substage ∈ {"scan", "annotate"}`（仅 process 阶段）；`current`/`total` 表示该 stage 内的进度。`commentor.py` 在三个 stage 起止各打一次（6 次），`process.py` 在每个 chapter + 每个 block 完成时打。CLI 通过 `make_default_progress_callback(quiet=False)` 装一个 `TqdmProgressDisplay` 双层 bar（外层 chapter / 内层 block）；`quiet=True` 装 `_NoOpDisplay`。回调抛异常被吞咽并 `_logger.warning`，不阻塞流水线。
+- **进度回调契约 (`ProgressEvent`)** — `Callable[[ProgressEvent], None]`；`stage ∈ {"extract", "process", "inject"}`、`substage ∈ {"scan", "annotate"}`（仅 process 阶段）；`current`/`total` 表示该 stage 内的进度。`commentor.py` 在三个 stage 起止各打一次（6 次），`process.py` 在每个 chapter + 每个 block 完成时打。CLI 通过 `make_default_progress_callback(quiet=False)` 装一个 `AliveProgressDisplay` 单条 bar：主计数为 chapter（每次 `process/scan` 推进一次），`bar.text` 动态切换为 `Ch. X/N: title (scan)` 或 `Ch. X/N: title (block Y/M)`；`quiet=True` 或 stderr 非 TTY 装 `_NoOpDisplay`（避免在 pipe / redirect 时输出转义码）。CLI 在 `try/finally` 末尾调 `progress_callback.__self__.close()` 让 alive_bar 上下文优雅退出。回调抛异常被吞咽并 `_logger.warning`，不阻塞流水线。
 
 - **Debug 日志 (`log_dir_path` + `[[Section]]` 段)** — `LLM(log_dir_path=...)` 或 CLI `--log-dir PATH` / `--debug`（默认 `./temp/logs/`）启用。每个 `LLMContext` 在 `__enter__` 创建一份 `request <UTC 时间戳>.log`，跨 retry 累积。每份文件包含的段：`[[Parameters]] / [[Request]] / [[Response]] / [[Error]]`（executor 写）、`[[CacheCheck]] cache_key=<前缀>; hit=<bool>`（context 写）、`[[StageError]] stage=<scan|annotate>; attempt=N/M; error=...; Raw excerpt: <前 400 字符>`（block/memo 写）、`[[FinalError]] stage=...; attempts_exhausted=true; exception=...`（block 写）。`tests/_mock_llm.MockLLM(log_dir_path=...)` 用同一份 `make_request_logger` 工厂，让单元测试也能断言日志段而无需真实 LLM。
 
@@ -232,8 +232,8 @@ EPUB Commentor 把 AI 评注定位为**页边的陪伴者**，而不是居高临
 | M4 校验 | ✅ 完成 | `llm/schema.py` + `errors.py` |
 | M5 测试 | ✅ 完成 | `tests/_mock_llm.py` + 7 个单元测试 + 10 个 challenge case + `scripts/comment_challenge.py` |
 | M6 CLI | ✅ 完成 | `scripts/comment_epub.py` + `commentor.py` + `cli.py` + entrypoint |
-| M7a 进度条 + Debug 日志 | ✅ 完成 | `epub_commentor/progress.py` (`ProgressEvent` / `TqdmProgressDisplay`) + `epub_commentor/llm/_debug_logger.py` + `[[CacheCheck]] / [[StageError]] / [[FinalError]]` 段 + `--log-dir` / `--debug` CLI 旗标 + `MockLLM(log_dir_path=...)` + `tests/test_commentor_log.py` |
+| M7a 进度条 + Debug 日志 | ✅ 完成 | `epub_commentor/progress.py` (`ProgressEvent` / `RichProgressDisplay` 单 Progress + 两 TaskID 堆叠，依赖 `rich.progress`) + `epub_commentor/llm/_debug_logger.py` + `[[CacheCheck]] / [[StageError]] / [[FinalError]]` 段 + `--log-dir` / `--debug` CLI 旗标 + `MockLLM(log_dir_path=...)` + `tests/test_commentor_log.py` |
 | M7b 真实 LLM 联调 | ⏳ 待实施 | 用 OpenAI 跑《The little prince》全本，验证样式、缓存、token 用量、Kindle 兼容性 |
-| M8 交互式章节选择 | ✅ 完成 | `ChapterFilter` callback (`Callable[[list[Chapter]], list[bool]]`) + `comment_epub(chapter_filter=...)` kwarg + `--interactive` / `-i` CLI 旗标（questionary checkbox，空章节默认不勾选，非 TTY 直接 `exit 2`）+ tqdm 在 `-i` 下自动静默 |
+| M8 交互式章节选择 | ✅ 完成 | `ChapterFilter` callback (`Callable[[list[Chapter]], list[bool]]`) + `comment_epub(chapter_filter=...)` kwarg + `--interactive` / `-i` CLI 旗标（questionary checkbox，空章节默认不勾选，非 TTY 直接 `exit 2`）+ 进度条在 `-i` 下自动静默 |
 
 详细 PRD 见 `plans/this-is-a-forked-encapsulated-seal.md`。

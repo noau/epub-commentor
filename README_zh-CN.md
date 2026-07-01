@@ -99,7 +99,7 @@ print(f"总 token 数: {result.total_tokens}")
 
 ### 带进度条
 
-CLI 默认装一个两层 `tqdm` 进度条：外层显示章节进度，内层显示当前章节的块进度。`extract` / `inject` 阶段则用 `tqdm.write()` 输出单行状态文字。
+CLI 默认装一个 `rich` `Progress`，两条 task 共享同一渲染帧垂直堆叠：上行是章节进度（`Ch. 3/28: 标题` + `3/28` + ETA），下行是当前章节的块进度（`(block 12/24)` + `12/24` + ETA），每行独立 spinner + bar + 计数。`extract` / `inject` 阶段则用 `print(..., file=sys.stderr)` 输出单行状态文字。
 
 如果你想在脚本里手动控制，可以装同样的渲染器，也可以自己实现：
 
@@ -115,7 +115,7 @@ from epub_commentor import (
 llm = LLM(...)
 config = CommentConfig(...)
 
-# 默认渲染器：stderr 上画两个 tqdm bar（quiet=True 完全静默）
+# 默认渲染器：stderr 上画一个 rich Progress，两条 task 垂直堆叠（quiet=True 完全静默）
 progress = make_default_progress_callback(quiet=False)
 result = comment_epub(source="book.epub", llm=llm, config=config, progress_callback=progress)
 ```
@@ -130,7 +130,7 @@ result = comment_epub(source="book.epub", llm=llm, config=config, progress_callb
 | `message` | `str \| None` | 自由文本（比如章节标题）。 |
 
 ```python
-# 自定义渲染器示例：把每个事件写日志而不是用 tqdm
+# 自定义渲染器示例：把每个事件写日志而不是用默认进度条
 def log_progress(event: ProgressEvent) -> None:
     label = event.substage or event.stage
     print(f"[{label}] {event.current}/{event.total}  {event.message or ''}")
@@ -242,7 +242,7 @@ poetry run epub-commentor path/to/source.epub --synopsis "..." -i
 
 EPUB 解析完毕后，会弹出 checkbox 列出所有章节：空格切换、`a` 全选、`i` 反选、回车确认。零 `<p>` 元素（封面、导航文档、纯图页）的章节默认不勾选——直接按回车就能一键跳过它们。
 
-`-i` 会自动抑制 tqdm 进度条（终端让给 questionary）。该旗标要求 stdin 是 TTY：通过管道输入时会以退出码 `2` 失败。
+`-i` 会自动抑制进度条（终端让给 questionary）。该旗标要求 stdin 是 TTY：通过管道输入时会以退出码 `2` 失败。
 
 ## 配置说明
 
@@ -362,7 +362,7 @@ except CommentorError as exc:
 
 ## Debug 日志
 
-长书跑到第 17/28 章突然出错时，光看 tqdm bar 是不够的。给 CLI 加 `--log-dir PATH`（或在 `format.json` 里设 `log_dir_path`），Commentor 会为每个 LLM 上下文写一份 `request YYYY-MM-DD HH-MM-SS.log`，里面的结构化段落可以 grep 定位问题：
+长书跑到第 17/28 章突然出错时，光看进度条是不够的。给 CLI 加 `--log-dir PATH`（或在 `format.json` 里设 `log_dir_path`），Commentor 会为每个 LLM 上下文写一份 `request YYYY-MM-DD HH-MM-SS.log`，里面的结构化段落可以 grep 定位问题：
 
 ```bash
 # 开启 debug 日志，落地到 ./temp/logs
