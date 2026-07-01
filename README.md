@@ -1,11 +1,8 @@
 <div align=center>
   <h1>EPUB Commentor</h1>
   <p>
-    <a href="https://github.com/your-org/epub-commentor/actions/workflows/merge-build.yml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/your-org/epub-commentor/merge-build.yml" alt="ci" /></a>
-    <a href="https://pypi.org/project/epub-commentor/" target="_blank"><img src="https://img.shields.io/badge/pip_install-epub--commentor-blue" alt="pip install epub-commentor" /></a>
-    <a href="https://pypi.org/project/epub-commentor/" target="_blank"><img src="https://img.shields.io/pypi/v/epub-commentor.svg" alt="pypi epub-commentor" /></a>
-    <a href="https://pypi.org/project/epub-commentor/" target="_blank"><img src="https://img.shields.io/pypi/pyversions/epub-commentor.svg" alt="python versions" /></a>
-    <a href="https://github.com/your-org/epub-commentor/blob/main/LICENSE" target="_blank"><img src="https://img.shields.io/github/license/your-org/epub-commentor" alt="license" /></a>
+    <a href="https://github.com/noau/epub-commentor/actions/workflows/merge-build.yml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/noau/epub-commentor/merge-build.yml" alt="ci" /></a>
+    <a href="https://github.com/noau/epub-commentor/blob/main/LICENSE" target="_blank"><img src="https://img.shields.io/github/license/noau/epub-commentor" alt="license" /></a>
   </p>
   <p>English | <a href="./README_zh-CN.md">中文</a></p>
 </div>
@@ -29,13 +26,13 @@ The output preserves every `<p>`, every `<em>`, every heading hierarchy of the s
 
 ## Installation
 
+Requires **Python 3.13+** and [Poetry](https://python-poetry.org/).
+
 ```bash
-pip install epub-commentor
+git clone https://github.com/noau/epub-commentor.git
+cd epub-commentor
+poetry install
 ```
-
-(or `poetry add epub-commentor` if you prefer project-scoped installs)
-
-**Requirements**: Python 3.11, 3.12, or 3.13.
 
 ## Quick Start
 
@@ -428,4 +425,4 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/your-org/epub-commentor/issues)
+- **Issues**: [GitHub Issues](https://github.com/noau/epub-commentor/issues)

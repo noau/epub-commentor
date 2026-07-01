@@ -1,11 +1,8 @@
 <div align=center>
   <h1>EPUB Commentor</h1>
   <p>
-    <a href="https://github.com/your-org/epub-commentor/actions/workflows/merge-build.yml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/your-org/epub-commentor/merge-build.yml" alt="ci" /></a>
-    <a href="https://pypi.org/project/epub-commentor/" target="_blank"><img src="https://img.shields.io/badge/pip_install-epub--commentor-blue" alt="pip install epub-commentor" /></a>
-    <a href="https://pypi.org/project/epub-commentor/" target="_blank"><img src="https://img.shields.io/pypi/v/epub-commentor.svg" alt="pypi epub-commentor" /></a>
-    <a href="https://pypi.org/project/epub-commentor/" target="_blank"><img src="https://img.shields.io/pypi/pyversions/epub-commentor.svg" alt="python 版本" /></a>
-    <a href="https://github.com/your-org/epub-commentor/blob/main/LICENSE" target="_blank"><img src="https://img.shields.io/github/license/your-org/epub-commentor" alt="许可证" /></a>
+    <a href="https://github.com/noau/epub-commentor/actions/workflows/merge-build.yml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/noau/epub-commentor/merge-build.yml" alt="ci" /></a>
+    <a href="https://github.com/noau/epub-commentor/blob/main/LICENSE" target="_blank"><img src="https://img.shields.io/github/license/noau/epub-commentor" alt="许可证" /></a>
   </p>
   <p><a href="./README.md">English</a> | 中文</p>
 </div>
@@ -29,13 +26,13 @@
 
 ## 安装
 
+需要 **Python 3.13+** 和 [Poetry](https://python-poetry.org/)。
+
 ```bash
-pip install epub-commentor
+git clone https://github.com/noau/epub-commentor.git
+cd epub-commentor
+poetry install
 ```
-
-（或用 `poetry add epub-commentor` 做项目级安装）
-
-**系统要求**：Python 3.11 / 3.12 / 3.13。
 
 ## 快速开始
 
@@ -428,4 +425,4 @@ poetry run python scripts/comment_challenge.py
 
 ## 支持
 
-- **问题反馈**：[GitHub Issues](https://github.com/your-org/epub-commentor/issues)
+- **问题反馈**：[GitHub Issues](https://github.com/noau/epub-commentor/issues)

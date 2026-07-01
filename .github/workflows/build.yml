@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       - name: Setup Poetry
         uses: abatilo/actions-poetry@v3
@@ -34,11 +34,7 @@ jobs:
 
       - name: Run pyright checking
         run: |
-          poetry run pyright epub_translator tests
-
-      - name: Run linting
-        run: |
-          poetry run pylint ./epub_translator/**/*.py ./tests/**/*.py
+          poetry run pyright epub_commentor tests
 
       - name: Run tests
         run: |

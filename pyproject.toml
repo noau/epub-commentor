@@ -40,8 +40,8 @@ dependencies = [
 epub-commentor = "epub_commentor.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/your-org/epub-commentor"
-Repository = "https://github.com/your-org/epub-commentor"
+Homepage = "https://github.com/noau/epub-commentor"
+Repository = "https://github.com/noau/epub-commentor"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -62,7 +62,7 @@ pyright = "^1.1.407"
 rich-selector = {develop = true}
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [
