@@ -56,7 +56,6 @@
   - [Picking chapters programmatically](#picking-chapters-programmatically)
   - [`CommentConfig` options](#commentconfig-options)
 - [FAQ](#faq)
-- [Related projects](#related-projects)
 - [License](#license)
 - [Support](#support)
 
@@ -426,13 +425,6 @@ No — any OpenAI-compatible API works (OpenAI, Azure, DeepSeek, local gateways,
 
 **Why did a chapter get skipped?**
 It had no readable paragraphs — typically a cover, table of contents, or image-only page. That's intentional. Pass `--fail-on-empty-chapter` if you'd rather be told loudly.
-
----
-
-## Related projects
-
-- [PDF Craft](https://github.com/oomol-lab/pdf-craft) — Convert a scanned or image-based PDF into an EPUB first, then run it through Commentor.
-- [SpineDigest](https://github.com/oomol-lab/spinedigest) — Want more than margin notes? It builds chapter summaries, book structure maps, and a knowledge graph.
 
 ## License
 

@@ -56,7 +56,6 @@
   - [用代码挑选章节](#用代码挑选章节)
   - [`CommentConfig` 选项](#commentconfig-选项)
 - [常见问题](#常见问题-1)
-- [相关项目](#相关项目)
 - [许可证](#许可证)
 - [支持](#支持)
 
@@ -426,13 +425,6 @@ except CommentorError as exc:
 
 **为什么某一章被跳过了？**
 它没有可读段落——通常是封面、目录或纯图页。这是有意为之。如果你更想被明确告知，传 `--fail-on-empty-chapter`。
-
----
-
-## 相关项目
-
-- [PDF Craft](https://github.com/oomol-lab/pdf-craft) — 先把扫描版 / 图片版 PDF 转成 EPUB，再走 Commentor 加评注。
-- [SpineDigest](https://github.com/oomol-lab/spinedigest) — 不止要夹注？它能出章节摘要、整书结构图与知识图谱。
 
 ## 许可证
 
