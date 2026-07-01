@@ -21,6 +21,7 @@ from ..epub.common import find_opf_path
 from ..epub.metadata import read_metadata
 from ..epub.spines import search_spine_paths
 from ..epub.zip import Zip
+from ..utils import normalize_whitespace
 from ..xml import XMLLikeNode, find_first, plain_text
 
 
@@ -48,9 +49,13 @@ ChapterFilter = Callable[[list[Chapter]], list[bool]]
 
 
 def _first_text(elem: Element) -> str:
-    """Recursively collect the first chunk of text inside ``elem``."""
+    """Recursively collect the first chunk of text inside ``elem``.
+
+    The returned text has its internal whitespace (incl. embedded ``\\n``)
+    collapsed to single spaces so titles never carry raw line breaks.
+    """
     if elem.text and elem.text.strip():
-        return elem.text.strip()
+        return normalize_whitespace(elem.text).strip()
     for child in elem:
         chunk = _first_text(child)
         if chunk:
@@ -184,10 +189,11 @@ def _derive_title(root: Element, chapter_path: Path) -> str:
         if text and len(text) <= _TITLE_MAX_LEN:
             return text
 
-    # Tier 3 — preview. Strip first so leading whitespace in the body
-    # doesn't shrink the preview to almost nothing; slice the first
-    # :data:`_TITLE_PREVIEW_LEN` characters of the cleaned text afterwards.
-    preview = plain_text(root).strip()[:_TITLE_PREVIEW_LEN]
+    # Tier 3 — preview. Normalize whitespace (collapsing embedded newlines)
+    # and strip first so leading whitespace in the body doesn't shrink the
+    # preview to almost nothing; slice the first :data:`_TITLE_PREVIEW_LEN`
+    # characters of the cleaned text afterwards.
+    preview = normalize_whitespace(plain_text(root)).strip()[:_TITLE_PREVIEW_LEN]
     if preview:
         return f"{preview}{_NO_TITLE_SUFFIX}"
 

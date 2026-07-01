@@ -32,6 +32,18 @@ from .progress import ProgressCallback, ProgressEvent
 
 _logger = logging.getLogger(__name__)
 
+# The placeholder memo emitted for empty / scan-failed chapters (see
+# ``epub_commentor.pipeline.process._empty_memo``) always starts its
+# ``core_thesis`` with this prefix. It's the single source of truth for
+# telling a processed chapter from a skipped one.
+_SKIPPED_PREFIX = "(chapter skipped"
+
+
+def _is_chapter_skipped(ann: ChapterAnnotation) -> bool:
+    """True iff ``ann`` is the placeholder produced for a skipped chapter."""
+    return ann.memo.core_thesis.startswith(_SKIPPED_PREFIX)
+
+
 # Re-exported for callers that prefer importing from ``epub_commentor``.
 __all__ = ["ChapterFilter", "CommentorResult", "ProgressCallback", "comment_epub"]
 
@@ -58,6 +70,11 @@ class CommentorResult:
     @property
     def total_comments(self) -> int:
         return sum(len(ann.comments) for ann in self.annotations)
+
+    @property
+    def processed_titles(self) -> list[str]:
+        """Titles of the chapters that were actually annotated (not skipped)."""
+        return [ann.chapter.title for ann in self.annotations if not _is_chapter_skipped(ann)]
 
 
 def _default_output_path(source: Path) -> Path:
@@ -100,7 +117,7 @@ def _count_chapters(annotations: list[ChapterAnnotation]) -> tuple[int, int]:
     processed = 0
     skipped = 0
     for ann in annotations:
-        if ann.memo.core_thesis.startswith("(chapter skipped"):
+        if _is_chapter_skipped(ann):
             skipped += 1
         else:
             processed += 1

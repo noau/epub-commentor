@@ -22,6 +22,10 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
 from .commentor import ChapterFilter, CommentorResult, comment_epub
 from .config import CommentConfig
 from .errors import CommentorError
@@ -295,32 +299,61 @@ def _build_chapter_filter(args: argparse.Namespace) -> ChapterFilter | None:
         ]
         try:
             # Selection.run() returns a `list[bool]` mask aligned with `choices`.
-            return Selection("Select chapters to annotate", choices).run()
+            mask = Selection("Select chapters to annotate", choices).run()
         except SelectionCancelled:  # user pressed Esc or Q
             print("aborted by user.", file=sys.stderr)
             sys.exit(130)
         except KeyboardInterrupt:  # user pressed Ctrl-C
             print("aborted by user.", file=sys.stderr)
             sys.exit(130)
+        # Wipe the selector off the screen before the progress bar takes over.
+        _clear_console()
+        return mask
 
     return _filter
 
 
+def _clear_console() -> None:
+    """Clear the terminal so the next phase renders on a tidy screen.
+
+    No-op when stderr is not a TTY (piped / redirected), so escape codes
+    never leak into captured output.
+    """
+    if sys.stderr.isatty():
+        Console(file=sys.stderr).clear()
+
+
 def _print_summary(result: CommentorResult, source: Path) -> None:
-    """Render a one-screen summary at the end of a successful run."""
-    print("")
-    print("=" * 60)
-    print(f"source:  {source}")
-    print(f"output:  {result.output_path}")
-    print(f"chapters processed: {result.chapters_processed}")
-    print(f"chapters skipped:   {result.chapters_skipped}")
-    print(f"comments generated: {result.total_comments}")
-    print("-" * 60)
-    print(f"input tokens:        {result.input_tokens}")
-    print(f"input cache tokens:  {result.input_cache_tokens}")
-    print(f"output tokens:       {result.output_tokens}")
-    print(f"total tokens:        {result.total_tokens}")
-    print("=" * 60)
+    """Render a rich one-screen summary at the end of a successful run."""
+    console = Console()
+
+    stats = Table.grid(padding=(0, 2))
+    stats.add_column(justify="right", style="bold")
+    stats.add_column(overflow="fold")
+    stats.add_row("source", str(source))
+    stats.add_row("output", str(result.output_path))
+    stats.add_row("chapters processed", str(result.chapters_processed))
+    stats.add_row("chapters skipped", str(result.chapters_skipped))
+    stats.add_row("comments generated", str(result.total_comments))
+    stats.add_row("input tokens", str(result.input_tokens))
+    stats.add_row("input cache tokens", str(result.input_cache_tokens))
+    stats.add_row("output tokens", str(result.output_tokens))
+    stats.add_row("total tokens", str(result.total_tokens))
+
+    titles = result.processed_titles
+    if titles:
+        chapters = Table.grid(padding=(0, 1))
+        chapters.add_column(justify="right", style="dim")
+        chapters.add_column(overflow="fold")
+        for i, title in enumerate(titles, start=1):
+            chapters.add_row(f"{i}.", title)
+        chapters_body: object = chapters
+    else:
+        chapters_body = "[dim]none[/dim]"
+
+    console.print()
+    console.print(Panel(stats, title="EPUB Commentor — summary", expand=False))
+    console.print(Panel(chapters_body, title="Chapters processed", expand=False))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -386,6 +419,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         progress_callback.__self__.close()  # type: ignore[attr-defined]
 
     if not args.quiet:
+        _clear_console()
         _print_summary(result, args.source)
 
     return 0
