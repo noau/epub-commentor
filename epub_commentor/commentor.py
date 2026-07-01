@@ -20,6 +20,7 @@ double), so unit tests can drive the full stack without an OpenAI call.
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -135,13 +136,15 @@ def comment_epub(
         defaults.
     progress_callback:
         Optional :class:`~epub_commentor.progress.ProgressEvent` hook
-        for CLI progress bars. Stages fired (in order):
-        ``"extract"``, ``"process"`` (with ``substage="scan"`` /
-        ``"annotate"`` events emitted by the pipeline), ``"inject"``.
-        When ``chapter_filter`` is supplied a synthetic
-        ``substage="select"`` event is emitted before and after the
-        callback returns so progress renderers can react to the
-        interactive phase if they choose to.
+        for the long-running LLM phase. Events are emitted with
+        ``stage="process"`` and ``substage="scan"`` /
+        ``substage="annotate"`` only. The ``extract`` and ``inject``
+        stages are short enough that ``commentor.py`` prints single
+        status lines to stderr directly; they do not flow through
+        this callback. The first event fires after any
+        ``chapter_filter`` has returned, so interactive filters
+        (e.g. questionary) never share terminal ownership with the
+        progress renderer.
     chapter_filter:
         Optional :data:`~epub_commentor.pipeline.extract.ChapterFilter`
         callback invoked between :func:`extract_chapters` and
@@ -162,21 +165,16 @@ def comment_epub(
     source_path = Path(source).resolve()
     target_path = Path(output).resolve() if output is not None else _default_output_path(source_path)
 
-    _emit_progress(progress_callback, ProgressEvent(stage="extract", current=0, total=1))
-
+    print("Extracting chapters...", file=sys.stderr)
     with Zip(source_path, target_path) as z:
         chapters, book_metadata = extract_chapters(z)
-        _emit_progress(progress_callback, ProgressEvent(stage="extract", current=1, total=1))
+        print(f"Extracted {len(chapters)} chapter(s).", file=sys.stderr)
 
         # Optional user-supplied chapter filter: returns a parallel bool mask
         # where True[i] keeps chapter i and False[i] drops it from the run.
         # Dropped chapters never reach process_chapters; their source bytes
         # flow through Zip.__exit__ as-is, so no restore step is needed.
         if chapter_filter is not None:
-            _emit_progress(
-                progress_callback,
-                ProgressEvent(stage="process", substage="select", current=0, total=len(chapters)),
-            )
             mask = chapter_filter(list(chapters))
             if not isinstance(mask, list) or len(mask) != len(chapters) or not all(isinstance(x, bool) for x in mask):
                 _logger.warning(
@@ -190,10 +188,6 @@ def comment_epub(
                     f"got {type(mask).__name__} of length {len(mask) if isinstance(mask, list) else 'n/a'}"
                 )
             chapters = [ch for ch, keep in zip(chapters, mask) if keep]
-            _emit_progress(
-                progress_callback,
-                ProgressEvent(stage="process", substage="select", current=len(chapters), total=len(chapters)),
-            )
 
         total = max(len(chapters), 1)
         _emit_progress(progress_callback, ProgressEvent(stage="process", current=0, total=total, substage="scan"))
@@ -210,9 +204,9 @@ def comment_epub(
         )
         _emit_progress(progress_callback, ProgressEvent(stage="process", current=total, total=total, substage="scan"))
 
-        _emit_progress(progress_callback, ProgressEvent(stage="inject", current=0, total=1))
+        print("Injecting annotations...", file=sys.stderr)
         inject_annotations(zip=z, annotations=annotations, config=cfg, book_metadata=book_metadata)
-        _emit_progress(progress_callback, ProgressEvent(stage="inject", current=1, total=1))
+        print("Injection complete.", file=sys.stderr)
 
     chapters_processed, chapters_skipped = _count_chapters(annotations)
 

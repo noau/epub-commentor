@@ -55,6 +55,8 @@ poetry run pyright epub_commentor
 
 `format.json` 由用户从 `format.template.json` 复制并填入 API key/URL 等。`scripts/comment_epub.py` 与 `epub_commentor.cli` 都通过同一份 `format.json` 构造**单个** LLM（`LLM(**cfg)` 直接散开顶层字段）。
 
+> Never do any git commit.
+
 ## 测试结构
 
 - `test.py` — 项目根的 pytest 入口脚本

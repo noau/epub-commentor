@@ -11,14 +11,15 @@ chapter:
     ⠋ Ch. 3/28: The Little Prince   ████████░░░░░  3/28  02:34
     ⠙ (block 12/24)                 ██████░░░░░░░ 12/24  00:31
 
-Stages
-------
-``extract`` and ``inject`` are short enough that single ``print()``
-status lines to stderr are sufficient. ``process`` is the long phase
-and drives the bar: ``substage="scan"`` advances the chapter-level
-counter (and resets the block counter) while ``substage="annotate"``
-advances the block-level counter. Both rows live the entire
-``process`` window so the visual state is always self-explanatory.
+Scope
+-----
+The callback only sees ``process``-stage events — the long LLM-driven
+phase. The ``extract`` and ``inject`` stages are short enough that
+``commentor.py`` prints single status lines to stderr directly; they
+do not flow through this callback. This keeps the progress renderer
+strictly after any user interaction (e.g. ``chapter_filter``'s
+questionary prompt), so rich and questionary never share terminal
+ownership.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from rich.progress import (
     SpinnerColumn,
     TaskID,
     TextColumn,
+    TimeElapsedColumn,
     TimeRemainingColumn,
 )
 
@@ -43,10 +45,12 @@ from rich.progress import (
 class ProgressEvent:
     """One progress update from the pipeline.
 
-    ``stage`` is one of ``"extract"``, ``"process"``, ``"inject"``.
-    ``substage`` is set only when ``stage == "process"``: ``"scan"``
-    advances the chapter-level task and resets the block task;
-    ``"annotate"`` advances the block-level task.
+    ``stage`` is ``"process"`` in practice. ``substage`` is set only
+    for the process stage: ``"scan"`` advances the chapter-level
+    task and resets the block task; ``"annotate"`` advances the
+    block-level task. The dataclass still accepts any ``stage``
+    string for forward compatibility, but the default renderer only
+    reacts to ``"process"``.
     """
 
     stage: str
@@ -82,51 +86,46 @@ class RichProgressDisplay:
 
     Lifecycle
     ---------
-    ``Progress.start()`` is called lazily on the first ``process / scan``
-    event so the extract stage's ``print()`` status lines render cleanly
-    to stderr before any bar appears. ``close()`` is idempotent. All
-    event delivery happens on the main thread (see
+    The :class:`rich.console.Console` is constructed and
+    ``Progress.start()`` is called lazily on the first ``process /
+    scan`` event so that no rich terminal ownership happens before
+    the pipeline's long-running stage. In particular, this lets
+    ``comment_epub``'s optional ``chapter_filter`` (which may invoke
+    questionary) run with full terminal control before any rich
+    rendering thread is alive. ``close()`` is idempotent. All event
+    delivery happens on the main thread (see
     ``pipeline/process.py``'s ``as_completed`` loop) — ``Progress.update``
     is internally thread-safe regardless.
     """
 
     def __init__(self) -> None:
-        self._console: Console = Console(file=sys.stderr)
+        self._console: Console | None = None
         self._progress: Progress | None = None
         self._chapter_task: TaskID | None = None
         self._block_task: TaskID | None = None
         self._closed: bool = False
 
     def _ensure_started(self) -> None:
-        """Lazily construct the ``Progress`` and add the two tasks."""
+        """Lazily construct the ``Console`` + ``Progress`` and add two tasks."""
         if self._progress is not None:
             return
+        self._console = Console(file=sys.stderr)
         self._progress = Progress(
             SpinnerColumn(),
             TextColumn("{task.description}"),
-            BarColumn(bar_width=24),
+            BarColumn(),
             MofNCompleteColumn(),
+            TimeElapsedColumn(),
             TimeRemainingColumn(),
             console=self._console,
-            transient=False,
+            transient=True,
+            expand=True,
         )
         self._progress.start()
         self._chapter_task = self._progress.add_task("准备中...", total=None)
         self._block_task = self._progress.add_task("—", total=None, visible=True)
 
     def update(self, event: ProgressEvent) -> None:
-        if event.stage == "extract":
-            if event.current == 0:
-                print("Extracting chapters...", file=sys.stderr)
-            elif event.current == event.total:
-                print(f"Extracted {event.total} chapter(s).", file=sys.stderr)
-            return
-        if event.stage == "inject":
-            if event.current == 0:
-                print("Injecting annotations...", file=sys.stderr)
-            elif event.current == event.total:
-                print("Injection complete.", file=sys.stderr)
-            return
         if event.stage != "process":
             return
 
@@ -168,6 +167,7 @@ class RichProgressDisplay:
         self._progress = None
         self._chapter_task = None
         self._block_task = None
+        self._console = None
 
 
 def make_default_progress_callback(quiet: bool = False) -> ProgressCallback:

@@ -355,7 +355,15 @@ class TestCommentEpub:
                     break
             assert any_chapter_linked, "no chapter has the <link> to commentary.css"
 
-    def test_progress_callback_fires_three_stages(self, tmp_path: Path) -> None:
+    def test_progress_callback_fires_process_stage_only(self, tmp_path: Path) -> None:
+        """Only the long ``process`` stage flows through the progress callback.
+
+        ``extract`` and ``inject`` are short enough that they print
+        status lines to stderr directly; this decouples the progress
+        renderer from any user interaction (e.g. ``chapter_filter``'s
+        questionary prompt) so rich and questionary never share
+        terminal ownership.
+        """
         asset = Path("tests/assets/The little prince.epub")
         if not asset.exists():
             pytest.skip(f"asset not found: {asset}")
@@ -383,9 +391,12 @@ class TestCommentEpub:
             progress_callback=cb,
         )
         stages = [e.stage for e in events]
-        assert "extract" in stages
+        assert "extract" not in stages
+        assert "inject" not in stages
         assert "process" in stages
-        assert "inject" in stages
+        # Every emitted event must be a process-stage event with a substage
+        # in {scan, annotate} — the decoupled renderer rejects any other shape.
+        assert all(e.substage in ("scan", "annotate") for e in events)
 
     def test_progress_callback_exception_does_not_crash(self, tmp_path: Path) -> None:
         asset = Path("tests/assets/The little prince.epub")
@@ -528,11 +539,7 @@ class TestChapterPreview:
 
     def test_includes_all_paragraphs_when_under_limit(self) -> None:
         """No hard paragraph cap: short chapters include every paragraph."""
-        ch = _mk_chapter_from_body(
-            "<html><body>"
-            "<p>one</p><p>two</p><p>three</p><p>four</p><p>five</p>"
-            "</body></html>"
-        )
+        ch = _mk_chapter_from_body("<html><body><p>one</p><p>two</p><p>three</p><p>four</p><p>five</p></body></html>")
         preview = _chapter_preview(ch)
         for word in ("one", "two", "three", "four", "five"):
             assert word in preview
@@ -541,10 +548,7 @@ class TestChapterPreview:
         """``plain_text`` walks the whole tree, so content in ``<div>`` /
         ``<h1>`` / ``<section>`` is captured — not just ``<p>``."""
         ch = _mk_chapter_from_body(
-            "<html><body>"
-            "<h1>Chapter Title</h1>"
-            "<div>And then a long div with no paragraphs at all.</div>"
-            "</body></html>"
+            "<html><body><h1>Chapter Title</h1><div>And then a long div with no paragraphs at all.</div></body></html>"
         )
         preview = _chapter_preview(ch)
         assert "Chapter Title" in preview
@@ -555,9 +559,7 @@ class TestChapterPreview:
         assert _chapter_preview(ch) == ""
 
     def test_whitespace_is_normalised(self) -> None:
-        ch = _mk_chapter_from_body(
-            "<html><body><p>line   one\n\nline\ttwo</p></body></html>"
-        )
+        ch = _mk_chapter_from_body("<html><body><p>line   one\n\nline\ttwo</p></body></html>")
         # Multiple spaces / newlines / tabs collapse to a single space.
         assert _chapter_preview(ch) == "line one line two"
 

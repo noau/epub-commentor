@@ -52,9 +52,7 @@
  * slanted text across sustained reading).
  */
 .commentary-note {
-  border-left: 3px solid #333;
-  margin-left: 2.3em;
-  padding-right: 0.5em;
+  border-left: 3px dotted #333;
 }
 
 /* Reserved for future transitions; the rule of thumb recorded here is
