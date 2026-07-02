@@ -40,12 +40,20 @@ class Chapter:
 
 
 # Type alias for an optional chapter-filter callback supplied by the caller.
-# The callback receives the spine-ordered list of chapters and returns a
-# parallel ``list[bool]`` mask: ``mask[i] = True`` keeps chapter ``i``,
-# ``mask[i] = False`` drops it from the run. Dropped chapters are never
-# passed to ``process_chapters``; their bytes flow through ``Zip.__exit__``
-# as-is, so no restoration logic is required.
-ChapterFilter = Callable[[list[Chapter]], list[bool]]
+# The callback receives the spine-ordered list of chapters plus the book's
+# OPF metadata (e.g. ``title``, ``creator``, ``language``) — the same dict
+# that Stage 1's prompt sees, but **without** the reserved ``__opf_path__``
+# key (stripped by :func:`epub_commentor.commentor.comment_epub`). It
+# returns a parallel ``list[bool]`` mask: ``mask[i] = True`` keeps chapter
+# ``i``, ``mask[i] = False`` drops it from the run. Dropped chapters are
+# never passed to ``process_chapters``; their bytes flow through
+# ``Zip.__exit__`` as-is, so no restoration logic is required.
+#
+# The second ``book_metadata`` parameter is ignored by simple user-driven
+# filters (e.g. ``--interactive``) and consumed by AI-driven filters (e.g.
+# ``--ai-select``) that need book-level context to make a verdict. Custom
+# user-supplied lambdas must accept it: ``lambda cs, _md: [...]``.
+ChapterFilter = Callable[[list[Chapter], dict[str, str]], list[bool]]
 
 
 def _first_text(elem: Element) -> str:

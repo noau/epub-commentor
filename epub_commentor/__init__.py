@@ -16,7 +16,9 @@ from .errors import (
     CommentorError,
     CommentOrphanPIdError,
     CommentOverlapError,
+    CommentReviewFailedError,
     CommentScanFailedError,
+    CommentSelectFailedError,
 )
 from .llm import LLM, Message, MessageRole
 from .pipeline import (
@@ -39,7 +41,9 @@ __all__ = [
     "CommentNoParagraphsError",
     "CommentOverlapError",
     "CommentOrphanPIdError",
+    "CommentReviewFailedError",
     "CommentScanFailedError",
+    "CommentSelectFailedError",
     "CommentorError",
     "CommentorResult",
     "LLM",

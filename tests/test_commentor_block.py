@@ -157,13 +157,7 @@ class TestAnnotateBlock:
     def test_data_p_id_is_stripped(self) -> None:
         chapter = _mk_chapter(2)
         paras = list(chapter.body.iter("p"))
-        llm = MockLLM(
-            responses_by_seed={
-                "annotate__response": json_dumps(
-                    {"comments": []}
-                )
-            }
-        )
+        llm = MockLLM(responses_by_seed={"annotate__response": json_dumps({"comments": []})})
         annotate_block(
             block_ps=paras,
             block_start_idx=0,
@@ -201,9 +195,7 @@ class TestPrivateMemoContext:
         assert out == ""
 
     def test_only_motifs(self) -> None:
-        out = _format_private_memo_context(
-            self._memo(motifs=["bell appears 3x", "punch-clock as predator"])
-        )
+        out = _format_private_memo_context(self._memo(motifs=["bell appears 3x", "punch-clock as predator"]))
         assert "Internal context" in out
         assert "never cite" in out
         assert "Motifs to keep in mind" in out

@@ -35,10 +35,15 @@ from epub_commentor.llm._debug_logger import make_request_logger
 from epub_commentor.llm.types import Message, MessageRole
 from epub_commentor.template import create_env
 
-# Cache-seed prefixes mirror the ones in memo.py / block.py so the mock
-# can route the right canned response to the right stage.
+# Cache-seed prefixes mirror the ones in memo.py / block.py / select.py /
+# review.py so the mock can route the right canned response to the right
+# stage. The book-level gates (select / review) use `:select:` and
+# `:review:` so a cached ``select`` response can never collide with a
+# cached ``review`` response — different seeds, different stages.
 _SCAN_PREFIX = ":scan:"
 _ANNOTATE_PREFIX = ":annotate:"
+_SELECT_PREFIX = ":select:"
+_REVIEW_PREFIX = ":review:"
 
 
 @dataclass
@@ -186,10 +191,13 @@ class MockLLM:
                 return self.responses_by_seed[seed]
             # 2. Stage-prefix dispatch: keys like "scan__response" or
             #    "annotate__response" match any seed whose body contains
-            #    the corresponding stage marker.
+            #    the corresponding stage marker. The book-level gates
+            #    (select / review) share the same pattern.
             stage_keys = {
                 _SCAN_PREFIX: "scan__response",
                 _ANNOTATE_PREFIX: "annotate__response",
+                _SELECT_PREFIX: "select__response",
+                _REVIEW_PREFIX: "review__response",
             }
             for marker, key in stage_keys.items():
                 if marker in seed and key in self.responses_by_seed:
@@ -213,6 +221,23 @@ class MockLLM:
     def annotate_seed(config_user_id: str, chapter_hash: str, block_hash: str) -> str:
         """Reconstruct the cache seed a real Stage 2 would use."""
         return f"commentor::annotate:{config_user_id}:{chapter_hash}::{block_hash}"
+
+    @staticmethod
+    def select_seed(config_user_id: str, book_hash: str) -> str:
+        """Reconstruct the cache seed a real ``--ai-select`` would use.
+
+        Mirrors :func:`epub_commentor.llm.select._select_seed` (with the
+        version prefix omitted — the mock ignores the opaque prefix).
+        """
+        return f"commentor::select:{config_user_id}:{book_hash}"
+
+    @staticmethod
+    def review_seed(config_user_id: str, book_hash: str) -> str:
+        """Reconstruct the cache seed a real ``--ai-review`` would use.
+
+        Mirrors :func:`epub_commentor.llm.review._review_seed`.
+        """
+        return f"commentor::review:{config_user_id}:{book_hash}"
 
 
 def json_dumps(obj: Any) -> str:

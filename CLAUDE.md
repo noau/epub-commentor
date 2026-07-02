@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 原项目文档：https://github.com/oomol-lab/epub-translator
 - Python ≥ 3.11，依赖管理使用 Poetry
 
-> **进度：M1-M8 完成（包重命名 / 两阶段 LLM / 注入 / 校验 / 测试 / CLI / 进度条 + debug 日志 / 交互式章节选择），M7b 真实 LLM 联调待实施**。CLAUDE.md 中标注 `[已实现]` / `[待实施]` 的章节反映这一状态。
+> **进度：M1-M9 完成（包重命名 / 两阶段 LLM / 注入 / 校验 / 测试 / CLI / 进度条 + debug 日志 / 交互式章节选择 / AI 批处理闸口），M7b 真实 LLM 联调待实施**。CLAUDE.md 中标注 `[已实现]` / `[待实施]` 的章节反映这一状态。
 
 ## 常用命令
 
@@ -88,23 +88,24 @@ poetry run pyright epub_commentor
 
 ### 顶层入口（`epub_commentor/__init__.py`）
 
-公开 API（M1-M8 完成态）：
+公开 API（M1-M9 完成态）：
 
 - LLM：`LLM`、`Message`、`MessageRole`
 - 配置 / 数据类：`CommentConfig`、`CommentKind`、`CommentPosition`、`ChapterAnnotation`、`CommentorResult`
-- 顶层编排：`comment_epub(source, output, llm, config, progress_callback, chapter_filter) -> CommentorResult`（阶段汇报顺序：`extract` → `process` → `inject`；`chapter_filter` 可选，详见下文）
+- 顶层编排：`comment_epub(source, output, llm, config, progress_callback, chapter_filter, annotation_filter) -> CommentorResult`（阶段汇报顺序：`extract` → `process` → `inject`；`chapter_filter` 可选，`annotation_filter` 可选，详见下文）
 - 进度回调：`ProgressCallback`（`Callable[[ProgressEvent], None]`）+ `ProgressEvent` dataclass + `make_default_progress_callback(quiet)` 工厂；CLI 默认装一个 `rich.progress.Progress` 渲染器，**单实例 + 两 TaskID** 垂直堆叠（chapter task 顶行 + block task 底行，每行独立 spinner + bar + M/N + ETA）
-- 章节过滤回调：`ChapterFilter`（`Callable[[list[Chapter]], list[bool]]`）— 返回与 spine 顺序等长的 bool mask，`True` 保留、`False` 跳过；CLI 在 `-i`/`--interactive` 下弹 rich-selector 多选（`↑/↓` 移动、`Space/Enter` 切换、`A/I/C` 全选/反选/清空，移动到 `[ Confirm ]` 后回车提交，`Esc/Q` 取消）
+- 章节过滤回调：`ChapterFilter`（`Callable[[list[Chapter], dict[str, str]], list[bool]]`）— 返回与 spine 顺序等长的 bool mask，`True` 保留、`False` 跳过；CLI 在 `-i`/`--interactive` 下弹 rich-selector 多选，`--ai-select` 走 LLM 驱动的批量闸口（两者互斥）
+- 评注过滤回调：`AnnotationFilter`（`Callable[[list[ChapterAnnotation], dict[str, str]], list[bool]]`）— 同样返回 mask；CLI 在 `--review` 下弹 rich-selector，`--ai-review` 走 LLM 驱动，`--no-review` 跳过闸口（三者互斥）
 - 提取 / 注入：`Chapter`、`extract_chapters`（pipeline 内）、`inject_annotations`（pipeline 内）
-- 异常：`CommentorError(ValueError)` + 五个子类（`CommentInvalidJSONError`、`CommentOrphanPIdError`、`CommentOverlapError`、`CommentScanFailedError`、`CommentNoParagraphsError`）
+- 异常：`CommentorError(ValueError)` + 七个子类（`CommentInvalidJSONError`、`CommentOrphanPIdError`、`CommentOverlapError`、`CommentScanFailedError`、`CommentNoParagraphsError`、`CommentSelectFailedError`、`CommentReviewFailedError`）
 
 ### 子包职责
 
-- **`epub_commentor/commentor.py`** + **`cli.py`**（[已实现]）— 顶层 `comment_epub()` 串联 extract → process → inject；CLI 走 argparse，所有旗标 1:1 映射 `CommentConfig` 字段
+- **`epub_commentor/commentor.py`** + **`cli.py`**（[已实现]）— 顶层 `comment_epub()` 串联 extract → process → inject；CLI 走 argparse，所有旗标 1:1 映射 `CommentConfig` 字段。M9 新增 `--ai-select` / `--ai-review` 两个 flag，与 `-i` / `--review` / `--no-review` 形成互斥对，缺省三层状态（手动 / AI / 不指定）保持兼容
 
-- **`epub_commentor/config.py`**（[已实现]）— `CommentConfig` 数据类（13 字段：`position` / `kinds` / `block_size` / `max_json_retries` / `max_scan_retries` / `concurrency` / `cache_seed_user_id` / `book_synopsis` / `inject_css` / `css_path_in_epub` / `target_language` / `fail_on_empty_chapter`）
+- **`epub_commentor/config.py`**（[已实现]）— `CommentConfig` 数据类（17 字段：`position` / `kinds` / `block_size` / `max_json_retries` / `max_scan_retries` / `concurrency` / `cache_seed_user_id` / `book_synopsis` / `inject_css` / `css_path_in_epub` / `target_language` / `fail_on_empty_chapter` / `ai_select_min_body_chars` / `ai_review_min_comments_per_chapter` / `ai_select_max_retries` / `ai_review_max_retries`）。4 个 `ai_*` 字段不暴露 CLI flag（v1 保持 CLI 简洁），仅由 `format.json` / 默认值控制；`_split_format_config` 自动按字段名路由到 `CommentConfig`
 
-- **`epub_commentor/errors.py`**（[已实现]）— `CommentorError(ValueError)` 基类 + 5 子类，全部继承自 `ValueError`
+- **`epub_commentor/errors.py`**（[已实现]）— `CommentorError(ValueError)` 基类 + 7 子类，全部继承自 `ValueError`
 
 - **`epub_commentor/llm/`**（[已实现]）
   - `_debug_logger.py:make_request_logger` — per-request FileHandler 工厂（共享给生产 `LLM` 和 `MockLLM`），按 UTC 秒级时间戳命名,秒内冲突自动 `_2/_3/...` 后缀
@@ -117,15 +118,17 @@ poetry run pyright epub_commentor
   - `error.py` — 判定 OpenAI / httpx / requests 中的可重试错误（timeout、5xx、网络）
   - `types.py` — `Message` dataclass + `MessageRole` enum（SYSTEM / USER / ASSISTANT）
   - `protocol.py:LLMProtocol` / `ContextProtocol` — 结构化 typing，便于 mock
-  - `schema.py`（[已实现]）— pydantic 模型（`KeyTerm` / `ChapterMemo` / `CommentPosition` / `CommentKind` / `CommentItem` / `BlockAnnotation`）+ `validate_block_annotations()` 检查 p_id 连续性 / 范围 / 块内重叠
+  - `schema.py`（[已实现]）— pydantic 模型（`KeyTerm` / `ChapterMemo` / `CommentPosition` / `CommentKind` / `CommentItem` / `BlockAnnotation` / `ChapterSelection` / `ChapterSelectionBatch` / `AnnotationSelection` / `AnnotationSelectionBatch`）+ `validate_block_annotations()` 检查 p_id 连续性 / 范围 / 块内重叠；selection 系列在 `model_validator(mode="after")` 里做 index 唯一性 / 连续性校验
   - `memo.py`（[已实现]）— Stage 1 全章扫读封装（拼 system + user 消息、走 `LLMContext`、pydantic 校验 → `ChapterMemo`；校验失败抛 `CommentScanFailedError` 并写 `[[StageError]]`）
   - `block.py`（[已实现]）— Stage 2 块级批注封装（切组 + 打 `data-p-id` + multi-turn retry 循环 + `finally` 块清除 `data-p-id`；穷尽 `max_json_retries` 抛 `CommentInvalidJSONError`，每次 retry 写 `[[StageError]]` / 最终 `[[FinalError]]`）
+  - `select.py`（[已实现]）— M9 `--ai-select` 后端：`select_chapters(chapters, book_metadata, llm, config) -> tuple[list[bool], dict[int, str]]`。单次 LLM 调用覆盖全书：标题 + 段数 + 首段预览喂入 LLM，返回 `include` 掩码 + 每条决定的 `reason`。复用 `_RESERVED_METADATA_KEYS` 剥离 `__opf_path__`，cache seed 用 `commentor:{ver}:select:{user_id}:{book_hash[:12]}`。失败抛 `CommentSelectFailedError`
+  - `review.py`（[已实现]）— M9 `--ai-review` 后端：`review_annotations(annotations, book_metadata, llm, config) -> tuple[list[bool], dict[int, str]]`。单次 LLM 调用覆盖全书：memo 摘要 + comment snippet 喂入 LLM；placeholder memo（`(chapter skipped` 前缀）与 0 评论章节被自动 `include=False` 且**不**走 LLM（节省 token）。失败抛 `CommentReviewFailedError`
 
-- **`epub_commentor/progress.py`**（[已实现]）— 进度渲染器（rich 后端）：`ProgressEvent` dataclass + `RichProgressDisplay`（单 `Progress` 实例 + `chapter_task` + `block_task` 两 `TaskID`，列：`SpinnerColumn · TextColumn · BarColumn · MofNCompleteColumn · TimeRemainingColumn`，`transient=False` 停在 100%）+ `_NoOpDisplay`（quiet 或非 TTY）+ `make_default_progress_callback(quiet)` 工厂；底层依赖 `rich.progress`
+- **`epub_commentor/progress.py`**（[已实现]）— 进度渲染器（rich 后端）：`ProgressEvent` dataclass + `RichProgressDisplay`（单 `Progress` 实例 + `chapter_task` + `block_task` 两 `TaskID`，列：`SpinnerColumn · TextColumn · BarColumn · MofNCompleteColumn · TimeRemainingColumn`，`transient=False` 停在 100%）+ `_NoOpDisplay`（quiet 或非 TTY）+ `make_default_progress_callback(quiet)` 工厂；底层依赖 `rich.progress`。`substage` 字段已扩展支持 `"select"` / `"review"`（AI 闸口，对未知 substage 静默 fall-through）
 
 - **`epub_commentor/pipeline/`**（[已实现]）
-  - `extract.py` — 提取层：`Zip.open` → 读 spine → 逐章 `XMLLikeNode.parse` → 拿到 `body_element` + 扁平化 `dict[str, str]` metadata（含保留键 `__opf_path__` 留给 inject 用）+ 每章 `Chapter`
-  - `process.py` — 处理层：Stage 1（`scan_chapter()`，**章间串行**）+ Stage 2（`annotate_block()`，**章内 `ThreadPoolExecutor` 并行**），返回 `list[ChapterAnnotation]`（`comments` 已按 `target_p_ids[0]` 排序，并把 block-local p_id 平移到绝对索引）；可选 `progress_callback` 参数，emit `ProgressEvent(stage="process", substage="scan"|"annotate", current, total, message)` 替代原本的 6 处原始 `print()`
+  - `extract.py` — 提取层：`Zip.open` → 读 spine → 逐章 `XMLLikeNode.parse` → 拿到 `body_element` + 扁平化 `dict[str, str]` metadata（含保留键 `__opf_path__` 留给 inject 用）+ 每章 `Chapter`；`ChapterFilter` 签名扩展为 `Callable[[list[Chapter], dict[str, str]], list[bool]]`（M9：第二个参数是已剥离 `__opf_path__` 的书级 metadata，AI 闸口需要）
+  - `process.py` — 处理层：Stage 1（`scan_chapter()`，**章间串行**）+ Stage 2（`annotate_block()`，**章内 `ThreadPoolExecutor` 并行**），返回 `list[ChapterAnnotation]`（`comments` 已按 `target_p_ids[0]` 排序，并把 block-local p_id 平移到绝对索引）；可选 `progress_callback` 参数，emit `ProgressEvent(stage="process", substage="scan"|"annotate"|"select"|"review", current, total, message)`；`AnnotationFilter` 签名扩展为 `Callable[[list[ChapterAnnotation], dict[str, str]], list[bool]]`（M9）
   - `inject.py` — 注入层：构造 `aside`（`commentary commentary-{kind}` 类、`cmt-...` id）→ 沿父链向上找 body 直接子元素 → 清除 `data-p-id` → `deduplicate_ids_in_element` → chapter `<head>` 注入 `<link rel="stylesheet">` → OPF `<manifest>` 加 `<item id="commentary-css">` → `Zip.add()` 注入 CSS → `zip.replace()` 写回每个章节
 
 - **`epub_commentor/epub/`**（[已实现] 全部 6 文件）
@@ -181,6 +184,21 @@ EPUB Commentor 把 AI 评注定位为**页边的陪伴者**，而不是居高临
 
 这三个字段在 `epub_commentor/llm/block.py:_format_private_memo_context` 中拼成 Stage 2 user 消息的一段"Internal context (private — never cite, never echo)"。它们**不会**出现在最终 EPUB 中，pydantic 用 `default_factory=list` 兼容旧 JSON。
 
+### AI 批处理闸口（M9）
+
+CLI 在 `-i` / `--review` 之外，**新增两个 AI 驱动的等价位**，专为批处理 / CI 场景设计（不依赖 TTY）：
+
+- **`--ai-select`** — 在 Stage 1 之前用 LLM 一次性决定哪些章节值得评注（pre-filter）。单次 LLM 调用覆盖全书，标题 + 段数 + 首段预览喂入。**与 `-i/--interactive` 互斥**。
+- **`--ai-review`** — 在 Stage 2 之后用 LLM 一次性决定哪些生成结果值得注入（post-filter）。placeholder memo（`(chapter skipped` 前缀）与 0 评论章节**自动** `include=False` 且**免去 LLM 调用**。**与 `--review` / `--no-review` 互斥**。
+
+四个 flag 形成三层状态：手动（`-i` / `--review`）/ AI（`--ai-select` / `--ai-review`）/ 不指定（保留原行为）。两类闸口共享同一条 `ChapterFilter` / `AnnotationFilter` 契约，新增 `Callable[[list, dict[str, str]], list[bool]]` 的第二个 `book_metadata` 参数。Library 调用方可在自己的 closure 里读取 `book_metadata["title"]` / `["creator"]` 等元信息（`__opf_path__` 已被 `commentor.py` 剥离）。
+
+`CommentorResult` 新增 `ai_select_decisions` / `ai_review_decisions`（`dict[int, tuple[str, bool, str]] | None`），CLI 在摘要面板渲染 `"✓ kept / ✗ dropped  ·  <reason>"`。`_AI_DECISION_SINKS` 模块级 dict 桥接 factory closure 与 `comment_epub`，`comment_epub` 在 filter 返回后 snapshot 进 `CommentorResult` 并清空 scratchpad，避免跨 run 泄漏。
+
+`process / select` 与 `process / review` 两个新 substage 在 `chapter_filter` / `annotation_filter` 前后各打一对事件；`RichProgressDisplay.update` 对未知 substage 静默 fall-through，无需改 rich 后端。4 个新 `ai_*` 字段（`ai_select_min_body_chars` / `ai_review_min_comments_per_chapter` / `ai_select_max_retries` / `ai_review_max_retries`）通过 `_split_format_config` 自动从 `format.json` 路由到 `CommentConfig`，CLI 不额外暴露（v1 保持 CLI 简洁）。
+
+失败语义：`select_chapters` 穷尽重试抛 `CommentSelectFailedError`、`review_annotations` 抛 `CommentReviewFailedError`，CLI 既有 `except CommentorError` 捕获 → exit 1。
+
 ## 单 LLM 架构
 
 **只用一个 LLM**（不再需要 translation / fill 双 LLM）。原因：评注任务的输出（JSON）结构化程度高，单一温度（如 0.4）足以兼顾"有文采"和"结构稳定"。
@@ -193,7 +211,7 @@ EPUB Commentor 把 AI 评注定位为**页边的陪伴者**，而不是居高临
 
 - **段落临时 id** — Stage 2 切组时给块内每个 `<p>` 加 `data-p-id="0..N"`，LLM 只能引用批内局部索引；`annotate_block` 在 `finally` 里清一次，注入层再防御性 strip 一次。`cmt-...` 评注 id 命名空间避免与原书 id 冲突；`inject_chapter` 末尾调 `deduplicate_ids_in_element`。
 
-- **进度回调契约 (`ProgressEvent`)** — `Callable[[ProgressEvent], None]`；`stage ∈ {"extract", "process", "inject"}`、`substage ∈ {"scan", "annotate"}`（仅 process 阶段）；`current`/`total` 表示该 stage 内的进度。`commentor.py` 在三个 stage 起止各打一次（6 次），`process.py` 在每个 chapter + 每个 block 完成时打。CLI 通过 `make_default_progress_callback(quiet=False)` 装一个 `AliveProgressDisplay` 单条 bar：主计数为 chapter（每次 `process/scan` 推进一次），`bar.text` 动态切换为 `Ch. X/N: title (scan)` 或 `Ch. X/N: title (block Y/M)`；`quiet=True` 或 stderr 非 TTY 装 `_NoOpDisplay`（避免在 pipe / redirect 时输出转义码）。CLI 在 `try/finally` 末尾调 `progress_callback.__self__.close()` 让 alive_bar 上下文优雅退出。回调抛异常被吞咽并 `_logger.warning`，不阻塞流水线。
+- **进度回调契约 (`ProgressEvent`)** — `Callable[[ProgressEvent], None]`；`stage ∈ {"extract", "process", "inject"}`、`substage ∈ {"scan", "annotate", "select", "review"}`（M9 新增 `"select"` / `"review"`，仅 process 阶段）；`current`/`total` 表示该 stage 内的进度。`commentor.py` 在三个 stage 起止各打一次（6 次），`process.py` 在每个 chapter + 每个 block 完成时打。CLI 通过 `make_default_progress_callback(quiet=False)` 装一个 `AliveProgressDisplay` 单条 bar：主计数为 chapter（每次 `process/scan` 推进一次），`bar.text` 动态切换为 `Ch. X/N: title (scan)` 或 `Ch. X/N: title (block Y/M)`；`quiet=True` 或 stderr 非 TTY 装 `_NoOpDisplay`（避免在 pipe / redirect 时输出转义码）。CLI 在 `try/finally` 末尾调 `progress_callback.__self__.close()` 让 alive_bar 上下文优雅退出。回调抛异常被吞咽并 `_logger.warning`，不阻塞流水线。`select` / `review` 由 `commentor.py` 在调用 `chapter_filter` / `annotation_filter` 前后各打一对（共 4 次），unknown substage 在 rich 后端静默 fall-through。
 
 - **Debug 日志 (`log_dir_path` + `[[Section]]` 段)** — `LLM(log_dir_path=...)` 或 CLI `--log-dir PATH` / `--debug`（默认 `./temp/logs/`）启用。每个 `LLMContext` 在 `__enter__` 创建一份 `request <UTC 时间戳>.log`，跨 retry 累积。每份文件包含的段：`[[Parameters]] / [[Request]] / [[Response]] / [[Error]]`（executor 写）、`[[CacheCheck]] cache_key=<前缀>; hit=<bool>`（context 写）、`[[StageError]] stage=<scan|annotate>; attempt=N/M; error=...; Raw excerpt: <前 400 字符>`（block/memo 写）、`[[FinalError]] stage=...; attempts_exhausted=true; exception=...`（block 写）。`tests/_mock_llm.MockLLM(log_dir_path=...)` 用同一份 `make_request_logger` 工厂，让单元测试也能断言日志段而无需真实 LLM。
 
@@ -224,6 +242,8 @@ EPUB Commentor 把 AI 评注定位为**页边的陪伴者**，而不是居高临
 - 改 `epub/zip.py` 要保证 mimetype 是 ZIP 的第一个 entry（在 `comment_epub()` 主循环里显式 `migrate`）
 - 改 CLI 旗标时同步更新 `tests/test_commentor_cli.py`（`test_minimal_invocation`、`test_all_flags`）
 - 改 `--interactive` / `ChapterFilter` 行为时同步更新 `tests/test_commentor_cli.py::TestBuildChapterFilter`（`-i` / TTY / 非 TTY 矩阵）与 `tests/test_commentor_pipeline.py::TestChapterFilter`（mask 长度 / 内容 / 顺序）；`mask` 校验失败抛 `ValueError`（不是 `CommentorError`），属程序员错误
+- 改 `--ai-select` / `--ai-review` / `ChapterFilter` / `AnnotationFilter` 签名时同步更新：`tests/test_commentor_select.py` / `tests/test_commentor_ai_review.py`（select / review 模块），`tests/test_commentor_cli.py::TestBuildAiChapterFilter` / `TestBuildAiAnnotationFilter`（CLI factory），`tests/test_commentor_pipeline.py::TestAiChapterFilter` / `TestAiAnnotationFilter` / `TestAiFilterIntegration`（commentor 编排）；`ChapterFilter` / `AnnotationFilter` 多一个 `dict[str, str]` 参数，所有 lambda 都要补 `_md` 占位符
+- 改 AI 闸口提示词（`data/select.jinja` / `data/review.jinja`）后跑 `tests/test_commentor_select.py::TestSelectChaptersHappyPath` / `tests/test_commentor_ai_review.py::TestReviewAnnotationsHappyPath`，再跑 `scripts/comment_challenge.py` 确认无回归
 - 改 `data/commentary.css` 时，本地跑 `pytest tests/test_commentor_css.py` 验证 CSS 字节被正确写入且符合 e-ink 约束（无 color / box-shadow，`break-inside: avoid` 必备）
 - 接新 LLM 测试时，先用 `tests/_mock_llm.MockLLM` 走 `process_chapters` 验证流水线，再用真 LLM 跑 `comment_challenge.py`
 
@@ -240,5 +260,6 @@ EPUB Commentor 把 AI 评注定位为**页边的陪伴者**，而不是居高临
 | M7a 进度条 + Debug 日志 | ✅ 完成 | `epub_commentor/progress.py` (`ProgressEvent` / `RichProgressDisplay` 单 Progress + 两 TaskID 堆叠，依赖 `rich.progress`) + `epub_commentor/llm/_debug_logger.py` + `[[CacheCheck]] / [[StageError]] / [[FinalError]]` 段 + `--log-dir` / `--debug` CLI 旗标 + `MockLLM(log_dir_path=...)` + `tests/test_commentor_log.py` |
 | M7b 真实 LLM 联调 | ⏳ 待实施 | 用 OpenAI 跑《The little prince》全本，验证样式、缓存、token 用量、Kindle 兼容性 |
 | M8 交互式章节选择 | ✅ 完成 | `ChapterFilter` callback (`Callable[[list[Chapter]], list[bool]]`) + `comment_epub(chapter_filter=...)` kwarg + `--interactive` / `-i` CLI 旗标（rich-selector 多选，空章节默认不勾选，非 TTY 直接 `exit 2`，`Esc/Q/Ctrl-C` → `exit 130`）+ 进度条在 `-i` 下自动静默 |
+| M9 AI 批处理闸口 | ✅ 完成 | `--ai-select` / `--ai-review` 双 AI flag（与 `-i` / `--review` / `--no-review` 互斥） + `ChapterFilter` / `AnnotationFilter` 签名扩展 (`Callable[[list, dict[str, str]], list[bool]]`) + `llm/select.py` `select_chapters` + `llm/review.py` `review_annotations` + `data/select.jinja` / `data/review.jinja` + `ChapterSelection` / `AnnotationSelection` pydantic schema + 4 个 `ai_*` `CommentConfig` 字段 + `CommentSelectFailedError` / `CommentReviewFailedError` 异常类 + `CommentorResult.ai_*_decisions` + 摘要面板 AI 决策展示 + `process / select` & `process / review` 进度事件 + `MockLLM` `:select:` / `:review:` 路由 + 真实《小王子》E2E 测试 |
 
 详细 PRD 见 `plans/this-is-a-forked-encapsulated-seal.md`。

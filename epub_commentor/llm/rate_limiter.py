@@ -111,10 +111,7 @@ class LLMRateLimiter:
         buffer. Always returns at least 1 so the budget accounting never
         silently grants zero-cost requests.
         """
-        rendered = [
-            {"role": _role_to_str(m.role), "content": m.message}
-            for m in messages
-        ]
+        rendered = [{"role": _role_to_str(m.role), "content": m.message} for m in messages]
         text = json.dumps(rendered, ensure_ascii=False)
         raw = len(self._encoding.encode(text))
         return max(1, math.ceil(raw * self._token_count_buffer))

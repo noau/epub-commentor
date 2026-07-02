@@ -7,7 +7,7 @@ from .zip import Zip
 
 
 # yield file_path, media_type
-def search_spine_paths(zip: Zip) -> Generator[tuple[Path, str], None, None]:
+def search_spine_paths(zip: Zip) -> Generator[tuple[Path, str]]:
     opf_path = find_opf_path(zip)
     opf_dir = opf_path.parent
 

@@ -37,13 +37,20 @@ _logger = logging.getLogger(__name__)
 _RESERVED_METADATA_KEYS = frozenset({"__opf_path__"})
 
 # Filter callback invoked between Stage 2 and the injection layer. Receives
-# the per-chapter ``ChapterAnnotation`` list and returns a parallel
-# ``list[bool]`` mask — ``True`` keeps the annotation, ``False`` drops it.
-# ``None`` (the default) skips the gate entirely. Mirrors the symmetric
-# :data:`ChapterFilter` defined in :mod:`epub_commentor.pipeline.extract`
-# so the pre-process (which-chapters-to-generate) and post-process
+# the per-chapter ``ChapterAnnotation`` list plus the book's OPF metadata
+# (the same dict Stage 1 sees, sans reserved ``__opf_path__``) and returns
+# a parallel ``list[bool]`` mask — ``True`` keeps the annotation,
+# ``False`` drops it. ``None`` (the default) skips the gate entirely.
+# Mirrors the symmetric :data:`ChapterFilter` defined in
+# :mod:`epub_commentor.pipeline.extract` so the pre-process
+# (which-chapters-to-generate) and post-process
 # (which-annotations-to-inject) gates are uniform in shape.
-AnnotationFilter = Callable[[list["ChapterAnnotation"]], list[bool]]
+#
+# The second ``book_metadata`` parameter is ignored by the simple user-
+# driven ``--review`` picker and consumed by AI-driven ``--ai-review``
+# filters that need book-level context. Custom user-supplied lambdas must
+# accept it: ``lambda anns, _md: [...]``.
+AnnotationFilter = Callable[[list["ChapterAnnotation"], dict[str, str]], list[bool]]
 
 
 @dataclass

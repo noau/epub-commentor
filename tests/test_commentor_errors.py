@@ -20,7 +20,9 @@ from epub_commentor import (
     CommentorError,
     CommentOrphanPIdError,
     CommentOverlapError,
+    CommentReviewFailedError,
     CommentScanFailedError,
+    CommentSelectFailedError,
 )
 from epub_commentor.config import CommentConfig
 from epub_commentor.llm.schema import (
@@ -55,7 +57,9 @@ class TestExceptionHierarchy:
             CommentNoParagraphsError,
             CommentOverlapError,
             CommentOrphanPIdError,
+            CommentReviewFailedError,
             CommentScanFailedError,
+            CommentSelectFailedError,
         ],
     )
     def test_concrete_subclass_inherits_commentor_error(self, cls: type) -> None:
@@ -157,6 +161,7 @@ class TestZeroParagraphChapter:
         from epub_commentor.pipeline.process import process_chapters
 
         ch = _make_zero_para_chapter()
+
         # process_chapters would normally call LLM, but with zero paragraphs
         # we expect it to short-circuit before scan_chapter. We assert that
         # by passing a sentinel LLM that must NOT be touched.
@@ -199,7 +204,9 @@ def test_top_level_re_exports() -> None:
         "CommentInvalidJSONError",
         "CommentOrphanPIdError",
         "CommentOverlapError",
+        "CommentReviewFailedError",
         "CommentScanFailedError",
+        "CommentSelectFailedError",
         "CommentNoParagraphsError",
     ):
         assert getattr(epub_commentor, name) is getattr(errors_mod, name)

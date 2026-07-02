@@ -50,6 +50,43 @@ def _is_chapter_skipped(ann: ChapterAnnotation) -> bool:
     return ann.memo.core_thesis.startswith(_SKIPPED_PREFIX)
 
 
+# Reserved metadata keys that must NEVER be exposed to the LLM prompt.
+# Mirrors the constant in :mod:`epub_commentor.pipeline.process`; lifted
+# here so the chapter and annotation filters receive the same stripped
+# metadata dict that Stage 1 / Stage 2 see.
+_RESERVED_METADATA_KEYS = frozenset({"__opf_path__"})
+
+
+def _strip_reserved_metadata(book_metadata: dict[str, str]) -> dict[str, str]:
+    """Return a copy of ``book_metadata`` with reserved keys removed.
+
+    Used at the filter call sites so user-supplied callbacks (including
+    the new AI-driven ``--ai-select`` / ``--ai-review`` closures) see the
+    same metadata shape that Stage 1 / Stage 2 prompts receive.
+    """
+    return {k: v for k, v in book_metadata.items() if k not in _RESERVED_METADATA_KEYS}
+
+
+# Per-run scratchpads populated by the AI-driven filter closures built in
+# :mod:`epub_commentor.cli` (``_build_ai_chapter_filter``,
+# ``_build_ai_annotation_filter``). Each entry maps ``spine_index -> (
+# chapter_title, mask_value, llm_reason )`` for the chapter at that
+# position, including the chapters that the filter kept so the summary
+# panel can show "AI kept this because …" alongside "AI dropped that
+# because …". ``comment_epub`` reads these once after the filter returns
+# and copies them into :class:`CommentorResult`, so library users that
+# don't enable AI filtering always see ``None`` for both fields.
+#
+# The dicts live here (not in :mod:`epub_commentor.cli`) so library
+# callers who wire their own AI filter into ``comment_epub`` can use the
+# same pattern without re-implementing the plumbing. CLI's factory closes
+# over the module-level reference at factory-build time.
+_AI_DECISION_SINKS: dict[str, dict[int, tuple[str, bool, str]]] = {
+    "select": {},
+    "review": {},
+}
+
+
 # Re-exported for callers that prefer importing from ``epub_commentor``.
 __all__ = ["ChapterFilter", "CommentorResult", "ProgressCallback", "comment_epub"]
 
@@ -65,6 +102,15 @@ class CommentorResult:
     ``chapters_filtered`` counts annotations dropped by the optional
     post-process review gate (e.g. ``--review`` CLI flag); it is 0 when
     no filter was applied or the filter accepted everything.
+
+    ``ai_select_decisions`` and ``ai_review_decisions`` capture the
+    verdicts returned by AI-driven filter closures (the CLI's
+    ``--ai-select`` / ``--ai-review`` flags). Each entry is
+    ``{spine_index: (chapter_title, include, llm_reason)}`` — populated
+    only when the corresponding AI filter actually ran; ``None`` for
+    runs that used interactive / none filters. The full map (kept +
+    dropped) is exposed so the summary panel can list "kept because …"
+    alongside "dropped because …" without needing the original chapters.
     """
 
     output_path: Path
@@ -77,6 +123,8 @@ class CommentorResult:
     input_tokens: int = 0
     input_cache_tokens: int = 0
     output_tokens: int = 0
+    ai_select_decisions: dict[int, tuple[str, bool, str]] | None = None
+    ai_review_decisions: dict[int, tuple[str, bool, str]] | None = None
 
     @property
     def total_comments(self) -> int:
@@ -139,6 +187,7 @@ def _review_gate(
     annotations: list[ChapterAnnotation],
     annotation_filter: AnnotationFilter | None,
     progress_callback: ProgressCallback | None,
+    book_metadata: dict[str, str] | None = None,
 ) -> list[ChapterAnnotation]:
     """Apply the optional :data:`AnnotationFilter` to ``annotations``.
 
@@ -159,7 +208,9 @@ def _review_gate(
     selector), the live Rich progress bar (if any) is closed first so
     that two Live regions don't share terminal ownership. The CLI's
     ``finally`` block calls ``close()`` again — it's idempotent, so the
-    double-close is a no-op.
+    double-close is a no-op. A pair of ``process / review`` events is
+    emitted around the filter call so progress consumers that listen for
+    new substages see the AI / interactive gate in their timeline.
 
     Mask contract
     -------------
@@ -180,7 +231,9 @@ def _review_gate(
         if callable(closer):
             closer()
 
-    mask = annotation_filter(annotations)
+    _emit_progress(progress_callback, ProgressEvent(stage="process", substage="review", current=0, total=1))
+    mask = annotation_filter(annotations, _strip_reserved_metadata(book_metadata or {}))
+    _emit_progress(progress_callback, ProgressEvent(stage="process", substage="review", current=1, total=1))
     if not isinstance(mask, list) or len(mask) != len(annotations) or not all(isinstance(x, bool) for x in mask):
         _logger.warning(
             "annotation_filter returned an invalid mask (got %s of length %s; expected list[bool] of length %d)",
@@ -239,21 +292,27 @@ def comment_epub(
         Optional :data:`~epub_commentor.pipeline.extract.ChapterFilter`
         callback invoked between :func:`extract_chapters` and
         :func:`process_chapters`. Receives the spine-ordered chapter
-        list and returns a parallel ``list[bool]`` mask — ``True`` keeps
-        the chapter, ``False`` drops it. Dropped chapters are never
-        passed to the LLM stage; their bytes flow through
-        :meth:`Zip.__exit__` as-is. ``None`` keeps every chapter.
+        list plus the book's OPF metadata (sans the reserved
+        ``__opf_path__`` key) and returns a parallel ``list[bool]`` mask
+        — ``True`` keeps the chapter, ``False`` drops it. Dropped
+        chapters are never passed to the LLM stage; their bytes flow
+        through :meth:`Zip.__exit__` as-is. ``None`` keeps every
+        chapter. The CLI wires this to ``-i/--interactive`` or
+        ``--ai-select``; library users can supply their own selection
+        logic.
     annotation_filter:
         Optional :data:`~epub_commentor.pipeline.process.AnnotationFilter`
         callback invoked between :func:`process_chapters` and
         :func:`inject_annotations`. Receives the per-chapter
-        ``ChapterAnnotation`` list and returns a parallel ``list[bool]``
-        mask — ``True`` keeps the annotation (it gets injected),
-        ``False`` drops it (the original chapter is written through
-        ``Zip.__exit__`` as-is). ``None`` injects everything
+        ``ChapterAnnotation`` list plus the book's OPF metadata (sans the
+        reserved ``__opf_path__`` key) and returns a parallel
+        ``list[bool]`` mask — ``True`` keeps the annotation (it gets
+        injected), ``False`` drops it (the original chapter is written
+        through ``Zip.__exit__`` as-is). ``None`` injects everything
         unconditionally. The CLI wires this to ``--review`` /
-        ``--no-review``; library users can supply their own selection
-        logic (e.g. "drop every annotation with skipped_blocks > 0").
+        ``--no-review`` / ``--ai-review``; library users can supply their
+        own selection logic (e.g. "drop every annotation with
+        ``skipped_blocks > 0``").
 
     Returns
     -------
@@ -287,11 +346,25 @@ def comment_epub(
             # where True[i] keeps chapter i and False[i] drops it from the run.
             # Dropped chapters never reach process_chapters; their source bytes
             # flow through Zip.__exit__ as-is, so no restore step is needed.
+            #
+            # When the closure was built by the CLI's AI factory, it pops a
+            # ``process / select`` event pair around itself (AI gate has its
+            # own long LLM round-trip; for the interactive ``-i`` flag the
+            # pair still fires but the gate is fast). We always emit the pair
+            # here so progress consumers see a consistent timeline.
+            ai_select_decisions: dict[int, tuple[str, bool, str]] | None = None
             if chapter_filter is not None:
-                mask = chapter_filter(list(chapters))
-                if not isinstance(mask, list) or len(mask) != len(chapters) or not all(isinstance(x, bool) for x in mask):
+                _emit_progress(progress_callback, ProgressEvent(stage="process", substage="select", current=0, total=1))
+                mask = chapter_filter(list(chapters), _strip_reserved_metadata(book_metadata))
+                _emit_progress(progress_callback, ProgressEvent(stage="process", substage="select", current=1, total=1))
+                if (
+                    not isinstance(mask, list)
+                    or len(mask) != len(chapters)
+                    or not all(isinstance(x, bool) for x in mask)
+                ):
                     _logger.warning(
-                        "chapter_filter returned an invalid mask (got %s of length %s; expected list[bool] of length %d)",
+                        "chapter_filter returned an invalid mask "
+                        "(got %s of length %s; expected list[bool] of length %d)",
                         type(mask).__name__,
                         len(mask) if isinstance(mask, list) else "<not a list>",
                         len(chapters),
@@ -300,6 +373,10 @@ def comment_epub(
                         f"chapter_filter must return a parallel list[bool] of length {len(chapters)}; "
                         f"got {type(mask).__name__} of length {len(mask) if isinstance(mask, list) else 'n/a'}"
                     )
+                # Snapshot the AI scratchpad *before* `chapters` is rebound so
+                # the summary panel gets the original titles and full mask.
+                ai_select_decisions = _AI_DECISION_SINKS["select"] or None
+                _AI_DECISION_SINKS["select"] = {}
                 chapters = [ch for ch, keep in zip(chapters, mask) if keep]
 
             total = max(len(chapters), 1)
@@ -318,7 +395,9 @@ def comment_epub(
                 config=cfg,
                 progress_callback=progress_callback,
             )
-            _emit_progress(progress_callback, ProgressEvent(stage="process", current=total, total=total, substage="scan"))
+            _emit_progress(
+                progress_callback, ProgressEvent(stage="process", current=total, total=total, substage="scan")
+            )
 
             # Optional post-process review gate. Symmetric to ``chapter_filter``
             # upstream: lets the user pick which generated annotations to inject
@@ -326,8 +405,10 @@ def comment_epub(
             # comment counts). ``None`` injects everything; the CLI's
             # ``--review`` / ``--no-review`` flags and the smart-trigger
             # policy live inside the filter closure, not here.
-            filtered_annotations = _review_gate(annotations, annotation_filter, progress_callback)
+            filtered_annotations = _review_gate(annotations, annotation_filter, progress_callback, book_metadata)
             chapters_filtered = len(annotations) - len(filtered_annotations)
+            ai_review_decisions = _AI_DECISION_SINKS["review"] or None
+            _AI_DECISION_SINKS["review"] = {}
 
             _logger.info("Injecting annotations...")
             inject_annotations(zip=z, annotations=filtered_annotations, config=cfg, book_metadata=book_metadata)
@@ -358,6 +439,8 @@ def comment_epub(
             input_tokens=input_tokens,
             input_cache_tokens=input_cache_tokens,
             output_tokens=output_tokens,
+            ai_select_decisions=ai_select_decisions,
+            ai_review_decisions=ai_review_decisions,
         )
     finally:
         # Always restore the previous SIGINT handler — even on abort.

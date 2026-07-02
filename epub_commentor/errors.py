@@ -5,7 +5,7 @@ All errors raised from the LLM stages and the validation layer derive from
 ``except CommentorError`` clause and still benefit from Python's built-in
 ``ValueError`` semantics (every subclass inherits from ``ValueError``).
 
-The five concrete subclasses correspond to the failure modes the PRD
+The seven concrete subclasses correspond to the failure modes the PRD
 identifies as recoverable / distinguishable from generic Python errors:
 
 - :class:`CommentInvalidJSONError` — Stage 2 LLM response could not be
@@ -22,6 +22,14 @@ identifies as recoverable / distinguishable from generic Python errors:
   elements and the caller asked to process it (e.g. poetry, list-only
   chapters, cover pages). This is a structural problem, not an LLM
   problem, and the caller may choose to skip such chapters.
+- :class:`CommentSelectFailedError` — The book-level pre-filter LLM call
+  (``--ai-select``) could not produce a valid
+  :class:`~epub_commentor.llm.schema.ChapterSelectionBatch` after
+  ``config.ai_select_max_retries`` attempts.
+- :class:`CommentReviewFailedError` — The book-level post-filter LLM call
+  (``--ai-review``) could not produce a valid
+  :class:`~epub_commentor.llm.schema.AnnotationSelectionBatch` after
+  ``config.ai_review_max_retries`` attempts.
 """
 
 from __future__ import annotations
@@ -56,6 +64,29 @@ class CommentNoParagraphsError(CommentorError):
     """A chapter contains zero ``<p>`` elements and cannot be annotated."""
 
 
+class CommentSelectFailedError(CommentorError):
+    """``--ai-select`` could not produce a valid ChapterSelectionBatch.
+
+    Raised after ``config.ai_select_max_retries`` exhausted attempts at
+    producing a JSON ``selections`` list whose indices match the input
+    chapters. The retry loop in :mod:`epub_commentor.llm.select` logs each
+    attempt as ``[[StageError]]`` and the exhaustion as ``[[FinalError]]``
+    before raising.
+    """
+
+
+class CommentReviewFailedError(CommentorError):
+    """``--ai-review`` could not produce a valid AnnotationSelectionBatch.
+
+    Raised after ``config.ai_review_max_retries`` exhausted attempts at
+    producing a JSON ``selections`` list whose ``chapter_index`` values
+    match the input annotations. The retry loop in
+    :mod:`epub_commentor.llm.review` logs each attempt as
+    ``[[StageError]]`` and the exhaustion as ``[[FinalError]]`` before
+    raising.
+    """
+
+
 class CommentAbortError(KeyboardInterrupt):
     """The user pressed Ctrl-C during the pipeline.
 
@@ -78,6 +109,8 @@ __all__ = [
     "CommentNoParagraphsError",
     "CommentOverlapError",
     "CommentOrphanPIdError",
+    "CommentReviewFailedError",
     "CommentScanFailedError",
+    "CommentSelectFailedError",
     "CommentorError",
 ]

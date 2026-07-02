@@ -476,7 +476,7 @@ class TestChapterFilter:
 
         keep_first_last = [True] + [False] * (n - 2) + [True] if n >= 2 else [True] * n
 
-        def _filter(_chapters: list[Chapter]) -> list[bool]:
+        def _filter(_chapters: list[Chapter], _md: dict[str, str]) -> list[bool]:
             return keep_first_last
 
         result = comment_epub(
@@ -498,7 +498,7 @@ class TestChapterFilter:
             out,
             llm=llm,
             config=CommentConfig(block_size=20),
-            chapter_filter=lambda cs: [False] * len(cs),
+            chapter_filter=lambda cs, _md: [False] * len(cs),
         )
         assert result.chapters_processed == 0
         assert result.chapters_skipped == 0
@@ -516,7 +516,7 @@ class TestChapterFilter:
                 out,
                 llm=llm,
                 config=CommentConfig(block_size=20),
-                chapter_filter=lambda cs: [True, False],
+                chapter_filter=lambda cs, _md: [True, False],
             )
 
     def test_mask_non_bool_elements_raise(self, tmp_path: Path) -> None:
@@ -524,7 +524,7 @@ class TestChapterFilter:
         src, out = self._copy_asset(tmp_path)
         llm = MockLLM(responses_by_seed={"scan__response": _memo_json()})
 
-        def _bad(_cs: list[Chapter]) -> list[int]:
+        def _bad(_cs: list[Chapter], _md: dict[str, str]) -> list[int]:
             return [1, 0, 1]
 
         with pytest.raises(ValueError, match=r"parallel list\[bool\]"):
@@ -554,7 +554,7 @@ class TestChapterFilter:
 
         seen: list[str] = []
 
-        def _record(cs: list[Chapter]) -> list[bool]:
+        def _record(cs: list[Chapter], _md: dict[str, str]) -> list[bool]:
             seen.extend(c.path.as_posix() for c in cs)
             return [True] * len(cs)
 

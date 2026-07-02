@@ -36,9 +36,7 @@ from epub_commentor.progress import (
 class TestNoOpIsTrulySilent:
     """``--quiet`` swallows every event, including soft-skip warns."""
 
-    def test_warn_event_does_not_emit_log_record(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_warn_event_does_not_emit_log_record(self, caplog: pytest.LogCaptureFixture) -> None:
         """A ``stage="warn"`` event must produce zero log records."""
         display = _NoOpDisplay()
         with caplog.at_level(logging.WARNING, logger="epub_commentor.progress"):
@@ -54,18 +52,12 @@ class TestNoOpIsTrulySilent:
         # genuinely a no-op now (the warn-channel was deduped out).
         assert caplog.records == []
 
-    def test_non_warn_events_are_dropped(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_non_warn_events_are_dropped(self, caplog: pytest.LogCaptureFixture) -> None:
         """Every non-warn stage produces zero log records."""
         display = _NoOpDisplay()
         with caplog.at_level(logging.DEBUG, logger="epub_commentor.progress"):
-            display.update(
-                ProgressEvent(stage="process", substage="scan", current=1, total=5)
-            )
-            display.update(
-                ProgressEvent(stage="process", substage="annotate", current=3, total=4)
-            )
+            display.update(ProgressEvent(stage="process", substage="scan", current=1, total=5))
+            display.update(ProgressEvent(stage="process", substage="annotate", current=3, total=4))
             display.update(ProgressEvent(stage="unknown", current=0, total=0))
             display.update(ProgressEvent(stage="extract", current=0, total=0))
         assert caplog.records == []
@@ -79,14 +71,10 @@ class TestNoOpIsTrulySilent:
 class TestStreamLogDisplay:
     """``--stream-logs`` / non-TTY: each event becomes one log record."""
 
-    def test_extract_event_emits_info_with_stage_extra(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_extract_event_emits_info_with_stage_extra(self, caplog: pytest.LogCaptureFixture) -> None:
         display = _StreamLogDisplay()
         with caplog.at_level(logging.DEBUG, logger="epub_commentor.progress"):
-            display.update(
-                ProgressEvent(stage="extract", current=2, total=10, message="hello")
-            )
+            display.update(ProgressEvent(stage="extract", current=2, total=10, message="hello"))
         info_records = [r for r in caplog.records if r.levelno == logging.INFO]
         assert len(info_records) == 1
         record = info_records[0]
@@ -96,9 +84,7 @@ class TestStreamLogDisplay:
         assert getattr(record, "current") == 2
         assert getattr(record, "total") == 10
 
-    def test_process_scan_event_emits_info_with_substage(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_process_scan_event_emits_info_with_substage(self, caplog: pytest.LogCaptureFixture) -> None:
         display = _StreamLogDisplay()
         with caplog.at_level(logging.DEBUG, logger="epub_commentor.progress"):
             display.update(
@@ -115,9 +101,7 @@ class TestStreamLogDisplay:
         assert getattr(record, "current") == 3
         assert getattr(record, "total") == 12
 
-    def test_process_annotate_event_emits_info_with_substage(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_process_annotate_event_emits_info_with_substage(self, caplog: pytest.LogCaptureFixture) -> None:
         display = _StreamLogDisplay()
         with caplog.at_level(logging.DEBUG, logger="epub_commentor.progress"):
             display.update(
@@ -134,9 +118,7 @@ class TestStreamLogDisplay:
         # No message → empty payload (formatter falls back to "").
         assert record.getMessage() == ""
 
-    def test_warn_event_emits_warning_level(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_warn_event_emits_warning_level(self, caplog: pytest.LogCaptureFixture) -> None:
         display = _StreamLogDisplay()
         with caplog.at_level(logging.DEBUG, logger="epub_commentor.progress"):
             display.update(
@@ -153,21 +135,15 @@ class TestStreamLogDisplay:
         assert getattr(record, "stage") == "warn"
         assert record.getMessage() == "soft skip"
 
-    def test_done_event_emits_info(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_done_event_emits_info(self, caplog: pytest.LogCaptureFixture) -> None:
         display = _StreamLogDisplay()
         with caplog.at_level(logging.DEBUG, logger="epub_commentor.progress"):
-            display.update(
-                ProgressEvent(stage="done", current=10, total=10, message="all done")
-            )
+            display.update(ProgressEvent(stage="done", current=10, total=10, message="all done"))
         record = next(r for r in caplog.records if r.levelno == logging.INFO)
         assert getattr(record, "stage") == "done"
         assert record.getMessage() == "all done"
 
-    def test_extras_are_json_serializable(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_extras_are_json_serializable(self, caplog: pytest.LogCaptureFixture) -> None:
         """The extras carried on every record must survive ``JsonFormatter``."""
         display = _StreamLogDisplay()
         with caplog.at_level(logging.DEBUG, logger="epub_commentor.progress"):
@@ -181,18 +157,13 @@ class TestStreamLogDisplay:
                 )
             )
         record = next(r for r in caplog.records if r.levelno == logging.INFO)
-        extras = {
-            key: getattr(record, key)
-            for key in ("stage", "substage", "current", "total", "message_event")
-        }
+        extras = {key: getattr(record, key) for key in ("stage", "substage", "current", "total", "message_event")}
         # No exception raised → extras are JSON-friendly even when
         # ``JsonFormatter`` later coerces non-serializable values via
         # ``default=str`` (e.g. Path / datetime objects).
         json.dumps(extras, default=str)
 
-    def test_emitted_logger_name_is_progress(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_emitted_logger_name_is_progress(self, caplog: pytest.LogCaptureFixture) -> None:
         display = _StreamLogDisplay()
         with caplog.at_level(logging.DEBUG):
             display.update(ProgressEvent(stage="process", current=1, total=1))
@@ -219,26 +190,20 @@ class TestFactory:
         cb = make_default_progress_callback(quiet=True, stream_logs=True)
         assert isinstance(cb.__self__, _NoOpDisplay)
 
-    def test_stream_logs_returns_stream_log_display(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_stream_logs_returns_stream_log_display(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # TTY=True but explicit stream_logs → still _StreamLogDisplay.
         monkeypatch.setattr("sys.stderr.isatty", lambda: True)
         cb = make_default_progress_callback(stream_logs=True)
         assert isinstance(cb.__self__, _StreamLogDisplay)
 
-    def test_non_tty_returns_stream_log_display(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_non_tty_returns_stream_log_display(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Auto-detect: stderr not a TTY → _StreamLogDisplay even
         # without an explicit flag.
         monkeypatch.setattr("sys.stderr.isatty", lambda: False)
         cb = make_default_progress_callback()
         assert isinstance(cb.__self__, _StreamLogDisplay)
 
-    def test_tty_without_stream_logs_returns_rich(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_tty_without_stream_logs_returns_rich(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # TTY=True and no flags → RichProgressDisplay.
         monkeypatch.setattr("sys.stderr.isatty", lambda: True)
         cb = make_default_progress_callback()

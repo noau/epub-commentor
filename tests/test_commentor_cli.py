@@ -275,9 +275,7 @@ class TestArgparseParser:
         assert ns.log_format == "text"
         assert ns.log_stream == "stderr"
 
-    def test_quiet_with_stream_logs_quiet_wins(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_quiet_with_stream_logs_quiet_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``--quiet`` overrides ``--stream-logs`` so cron users get zero output."""
         from epub_commentor.progress import _NoOpDisplay, make_default_progress_callback
 

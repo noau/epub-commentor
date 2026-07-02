@@ -92,10 +92,7 @@ class TestSetupRootLogger:
         project = logging.getLogger(_PROJECT_LOGGER)
         with caplog.at_level(logging.DEBUG, logger=_PROJECT_LOGGER):
             project.info("now visible")
-        assert any(
-            r.name == _PROJECT_LOGGER and r.getMessage() == "now visible"
-            for r in caplog.records
-        )
+        assert any(r.name == _PROJECT_LOGGER and r.getMessage() == "now visible" for r in caplog.records)
 
     def test_default_level_is_warning(self) -> None:
         setup_root_logger()
@@ -131,9 +128,7 @@ class TestTextFormatter:
         )
         formatter = TextFormatter()
         ts = formatter.formatTime(record)
-        assert re.fullmatch(
-            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", ts
-        ), ts
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", ts), ts
 
     def test_full_line_shape(self) -> None:
         record = logging.LogRecord(
@@ -190,9 +185,7 @@ class TestJsonFormatter:
         assert payload["level"] == "INFO"
         assert payload["logger"] == _PROJECT_LOGGER
         assert payload["message"] == "hello"
-        assert re.fullmatch(
-            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", payload["ts"]
-        )
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", payload["ts"])
 
     def test_extras_are_merged_into_top_level(self) -> None:
         record = logging.LogRecord(

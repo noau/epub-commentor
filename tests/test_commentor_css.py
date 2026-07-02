@@ -96,9 +96,7 @@ class TestCommentaryCss:
         def first_border_left(selector: str) -> tuple[int, str]:
             block = _selector_block(css, selector)
             # border-left shorthand: <width> <style> <color>
-            m = re.search(
-                r"border-left[^:]*:\s*\D*?(\d+)px\s+(\w+)", block
-            )
+            m = re.search(r"border-left[^:]*:\s*\D*?(\d+)px\s+(\w+)", block)
             assert m, f"no border-left shorthand in {selector} block: {block!r}"
             return int(m.group(1)), m.group(2)
 

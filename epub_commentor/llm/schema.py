@@ -6,6 +6,10 @@ This module defines the JSON contract between the LLM and the pipeline:
 - :class:`BlockAnnotation` is produced by Stage 2 (per-block annotation); it
   contains a list of :class:`CommentItem`, each pinning a contiguous range of
   paragraphs inside the block.
+- :class:`ChapterSelectionBatch` is produced by the book-level pre-filter
+  (``--ai-select``); it decides which chapters deserve commentary.
+- :class:`AnnotationSelectionBatch` is produced by the book-level post-filter
+  (``--ai-review``); it decides which generated annotations to inject.
 
 Stage 2 also relies on :func:`validate_block_annotations` to enforce structural
 invariants that the pydantic model alone cannot express (in-block overlaps,
@@ -14,7 +18,7 @@ contiguous p_id ranges, p_id falling inside the block).
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .. import errors as _errors
 
@@ -98,6 +102,91 @@ def _format_pids(pids: list[int]) -> str:
     return "[" + ", ".join(str(p) for p in pids) + "]"
 
 
+class ChapterSelection(BaseModel):
+    """One entry of the ``--ai-select`` pre-filter output.
+
+    ``index`` is the 0-based position in the spine-ordered chapter list the
+    LLM was shown. ``include=True`` keeps the chapter for Stage 1 / Stage 2;
+    ``False`` drops it. ``reason`` is a single sentence the CLI surfaces in
+    the post-run summary panel so operators can audit AI decisions.
+    """
+
+    index: int = Field(..., ge=0)
+    include: bool
+    reason: str = Field(..., min_length=1, max_length=240)
+
+
+class ChapterSelectionBatch(BaseModel):
+    """The full ``--ai-select`` response.
+
+    A single object containing every chapter's verdict so the LLM cannot
+    leave any chapter unaddressed. The :meth:`_check_indices` validator
+    enforces that ``selections`` covers the input set exactly: indices are
+    unique, non-negative, and span ``[0, N)`` contiguously where ``N`` is
+    the number of input chapters. Violations surface as a pydantic
+    :class:`ValidationError` which the caller converts into a corrective
+    user message for the next retry attempt.
+    """
+
+    selections: list[ChapterSelection] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def _check_indices(self) -> "ChapterSelectionBatch":
+        indices = [s.index for s in self.selections]
+        if len(set(indices)) != len(indices):
+            raise _errors.CommentSelectFailedError(f"ChapterSelectionBatch has duplicate indices: {indices}")
+        if indices != sorted(indices):
+            # Order is canonical in spine position; LLM must echo it back.
+            raise _errors.CommentSelectFailedError(
+                f"ChapterSelectionBatch indices must be in ascending order, got {indices}"
+            )
+        if indices != list(range(len(indices))):
+            raise _errors.CommentSelectFailedError(
+                f"ChapterSelectionBatch indices must be contiguous 0..{len(indices) - 1}, got {indices}"
+            )
+        return self
+
+
+class AnnotationSelection(BaseModel):
+    """One entry of the ``--ai-review`` post-filter output.
+
+    ``chapter_index`` is the 0-based position in the annotation list the LLM
+    was shown. ``include=True`` keeps the chapter's annotations in the
+    injected EPUB; ``False`` drops them. ``reason`` surfaces in the post-run
+    summary panel.
+    """
+
+    chapter_index: int = Field(..., ge=0)
+    include: bool
+    reason: str = Field(..., min_length=1, max_length=240)
+
+
+class AnnotationSelectionBatch(BaseModel):
+    """The full ``--ai-review`` response.
+
+    Mirrors :class:`ChapterSelectionBatch` for the post-filter stage. The
+    :meth:`_check_indices` validator enforces uniqueness, ascending order,
+    and contiguous ``[0, N)`` coverage.
+    """
+
+    selections: list[AnnotationSelection] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def _check_indices(self) -> "AnnotationSelectionBatch":
+        indices = [s.chapter_index for s in self.selections]
+        if len(set(indices)) != len(indices):
+            raise _errors.CommentReviewFailedError(f"AnnotationSelectionBatch has duplicate indices: {indices}")
+        if indices != sorted(indices):
+            raise _errors.CommentReviewFailedError(
+                f"AnnotationSelectionBatch indices must be in ascending order, got {indices}"
+            )
+        if indices != list(range(len(indices))):
+            raise _errors.CommentReviewFailedError(
+                f"AnnotationSelectionBatch indices must be contiguous 0..{len(indices) - 1}, got {indices}"
+            )
+        return self
+
+
 def validate_block_annotations(ann: BlockAnnotation, block_size: int) -> list[CommentItem]:
     """Validate Stage 2 output against block boundaries and overlap rules.
 
@@ -148,8 +237,12 @@ def validate_block_annotations(ann: BlockAnnotation, block_size: int) -> list[Co
 
 
 __all__ = [
+    "AnnotationSelection",
+    "AnnotationSelectionBatch",
     "BlockAnnotation",
     "ChapterMemo",
+    "ChapterSelection",
+    "ChapterSelectionBatch",
     "CommentItem",
     "CommentKind",
     "CommentOrphanPIdError",

@@ -166,9 +166,7 @@ def setup_root_logger(level: str = "WARNING", fmt: str = "text", stream: str = "
     """
     normalised_level = level.upper()
     if normalised_level not in _VALID_LEVELS:
-        raise ValueError(
-            f"unknown log level {level!r}; expected one of {', '.join(_VALID_LEVELS)}"
-        )
+        raise ValueError(f"unknown log level {level!r}; expected one of {', '.join(_VALID_LEVELS)}")
 
     stream_obj = sys.stdout if stream == "stdout" else sys.stderr
     root = logging.getLogger("epub_commentor")

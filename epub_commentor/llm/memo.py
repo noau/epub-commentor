@@ -131,8 +131,7 @@ def scan_chapter(
     assert last_error is not None  # always set when we exit the retry loop without returning
     if ctx.logger is not None:
         ctx.logger.error(
-            f"[[FinalError]] stage=scan; attempts_exhausted=true; "
-            f"exception={type(last_error).__name__}: {last_error}\n"
+            f"[[FinalError]] stage=scan; attempts_exhausted=true; exception={type(last_error).__name__}: {last_error}\n"
         )
     raise CommentScanFailedError(
         f"Stage 1 (scan) returned invalid ChapterMemo JSON for "

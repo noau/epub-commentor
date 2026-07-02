@@ -28,7 +28,7 @@ def index_of_parent(parent: Element, checked_element: Element) -> int:
     raise ValueError("Element not found in parent.")
 
 
-def expand_left_element_texts(element: Element) -> Generator[str, None, None]:
+def expand_left_element_texts(element: Element) -> Generator[str]:
     yield "<"
     yield element.tag
     yield " "
@@ -36,7 +36,7 @@ def expand_left_element_texts(element: Element) -> Generator[str, None, None]:
     yield '="99">'
 
 
-def expand_right_element_texts(element: Element) -> Generator[str, None, None]:
+def expand_right_element_texts(element: Element) -> Generator[str]:
     yield "</"
     yield element.tag
     yield ">"

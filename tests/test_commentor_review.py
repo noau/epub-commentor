@@ -78,7 +78,7 @@ class TestReviewGateNoOp:
         invoking the filter (avoids opening a picker with zero choices)."""
         called = []
 
-        def _f(annotations: list[ChapterAnnotation]) -> list[bool]:
+        def _f(annotations: list[ChapterAnnotation], _md: dict[str, str]) -> list[bool]:
             called.append(annotations)
             return []
 
@@ -91,7 +91,7 @@ class TestReviewGateNoOp:
         and the filter are supplied."""
         annotations = [_mk_annotation(0), _mk_annotation(1)]
 
-        def _f(anns: list[ChapterAnnotation]) -> list[bool]:
+        def _f(anns: list[ChapterAnnotation], _md: dict[str, str]) -> list[bool]:
             assert anns == annotations
             return [True, False]
 
@@ -111,17 +111,17 @@ class TestMaskValidation:
     def test_mask_length_mismatch_raises_value_error(self) -> None:
         annotations = [_mk_annotation(0), _mk_annotation(1), _mk_annotation(2)]
         with pytest.raises(ValueError, match=r"parallel list\[bool\]"):
-            _review_gate(annotations, annotation_filter=lambda _: [True, False], progress_callback=None)
+            _review_gate(annotations, annotation_filter=lambda _a, _md: [True, False], progress_callback=None)
 
     def test_mask_non_bool_raises_value_error(self) -> None:
         annotations = [_mk_annotation(0), _mk_annotation(1)]
         with pytest.raises(ValueError, match=r"parallel list\[bool\]"):
-            _review_gate(annotations, annotation_filter=lambda _: [1, 0], progress_callback=None)
+            _review_gate(annotations, annotation_filter=lambda _a, _md: [1, 0], progress_callback=None)
 
     def test_mask_non_list_raises_value_error(self) -> None:
         annotations = [_mk_annotation(0)]
         with pytest.raises(ValueError, match=r"parallel list\[bool\]"):
-            _review_gate(annotations, annotation_filter=lambda _: (True,), progress_callback=None)
+            _review_gate(annotations, annotation_filter=lambda _a, _md: (True,), progress_callback=None)
 
 
 class TestProgressInteraction:
@@ -144,7 +144,7 @@ class TestProgressInteraction:
         fake_progress = mock.Mock()
         fake_progress.close.side_effect = lambda: order.append("close")
 
-        def _f(anns: list[ChapterAnnotation]) -> list[bool]:
+        def _f(anns: list[ChapterAnnotation], _md: dict[str, str]) -> list[bool]:
             order.append("filter")
             return [True]
 
@@ -170,7 +170,7 @@ class TestProgressInteraction:
     def test_progress_not_closed_when_annotations_empty(self) -> None:
         callback = mock.Mock()
         callback.__self__ = mock.Mock()
-        _review_gate([], annotation_filter=lambda anns: [], progress_callback=callback)
+        _review_gate([], annotation_filter=lambda _anns, _md: [], progress_callback=callback)
         callback.__self__.close.assert_not_called()
 
     def test_no_self_attribute_does_not_crash(self) -> None:
@@ -179,7 +179,7 @@ class TestProgressInteraction:
         attribute probe degrades to a no-op."""
         original = _mk_annotation(0)
 
-        def _f(anns: list[ChapterAnnotation]) -> list[bool]:
+        def _f(anns: list[ChapterAnnotation], _md: dict[str, str]) -> list[bool]:
             return [True]
 
         def _plain_progress(event) -> None:  # no __self__ attribute

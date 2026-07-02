@@ -169,7 +169,7 @@ class LLM:
         """
         return make_request_logger(self._log_dir_path)
 
-    def _search_quotes(self, kind: str, response: str) -> Generator[str, None, None]:
+    def _search_quotes(self, kind: str, response: str) -> Generator[str]:
         start_marker = f"```{kind}"
         end_marker = "```"
         start_index = 0

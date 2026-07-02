@@ -19,7 +19,7 @@ def index_in_parent(parent: Element, element: Element) -> int | None:
     return None
 
 
-def iter_with_stack(element: Element) -> Generator[tuple[list[Element], Element], None, None]:
+def iter_with_stack(element: Element) -> Generator[tuple[list[Element], Element]]:
     """先序遍历：yield parent_path, element"""
     stack: list[list[Element]] = [[element]]
     while stack:
@@ -50,7 +50,7 @@ def plain_text(element: Element) -> str:
     return "".join(_iter_text_in(element))
 
 
-def _iter_text_in(element: Element) -> Generator[str, None, None]:
+def _iter_text_in(element: Element) -> Generator[str]:
     if element.text:
         yield element.text
     for child in element:

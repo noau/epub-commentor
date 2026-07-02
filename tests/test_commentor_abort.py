@@ -144,8 +144,7 @@ class TestInstallSigintHandler:
             timeout=10,
         )
         assert result.returncode == 130, (
-            f"expected exit 130, got {result.returncode}\n"
-            f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+            f"expected exit 130, got {result.returncode}\nstdout={result.stdout!r}\nstderr={result.stderr!r}"
         )
 
 

@@ -27,6 +27,14 @@ class CommentConfig:
 
     The defaults match the PRD §公开 API; users typically only override
     ``book_synopsis``, ``kinds`` and ``block_size``.
+
+    The four ``ai_*`` fields are book-level LLM gates that drive the
+    ``--ai-select`` (pre-filter) and ``--ai-review`` (post-filter) modes.
+    They are intentionally **not** exposed as CLI flags in v1 — operators
+    tune them via ``format.json`` rather than the command line, so the
+    CLI surface stays lean. The CLI's argparse layer only needs to know
+    whether the gates are on or off; once on, every numeric knob flows
+    through ``_split_format_config`` into this dataclass automatically.
     """
 
     position: CommentPosition = CommentPosition.BEFORE
@@ -43,6 +51,19 @@ class CommentConfig:
     fail_on_empty_chapter: bool = False
     fail_on_block_error: bool = False
     skip_chapter_on_empty_annotation: bool = False
+    # ---- Book-level AI gates (--ai-select / --ai-review) ----
+    ai_select_min_body_chars: int = 200
+    """Max characters of body preview fed to the ``--ai-select`` LLM call
+    per chapter. Keeps the prompt cheap (~2.4K tokens for a 28-chapter
+    book vs. ~165K for a full Stage 1 scan)."""
+    ai_review_min_comments_per_chapter: int = 1
+    """Chapters whose Stage 2 output has fewer comments than this are
+    auto-dropped by ``--ai-review`` (no LLM call). 1 means "drop
+    zero-comment chapters"; raise to drop sparser chapters too."""
+    ai_select_max_retries: int = 3
+    """Independent retry budget for the ``--ai-select`` LLM call."""
+    ai_review_max_retries: int = 3
+    """Independent retry budget for the ``--ai-review`` LLM call."""
 
 
 __all__ = ["CommentConfig"]

@@ -34,7 +34,9 @@ from .config import CommentConfig
 from .errors import CommentAbortError, CommentorError
 from .llm import LLM
 from .llm._api_key import EPUB_COMMENTOR_API_KEY_ENV_VAR, resolve_api_key
+from .llm.review import review_annotations
 from .llm.schema import CommentKind, CommentPosition
+from .llm.select import select_chapters
 from .logging_setup import setup_root_logger
 from .pipeline import AnnotationFilter, ChapterAnnotation
 from .pipeline.extract import Chapter
@@ -45,6 +47,10 @@ from .xml import plain_text
 # Reused from commentor.py to detect placeholder memos for the review
 # picker's pre-deselect logic.
 _SKIPPED_PREFIX = "(chapter skipped"
+
+# AI decisions are written into ``commentor._AI_DECISION_SINKS`` directly
+# (see ``_build_ai_chapter_filter`` / ``_build_ai_annotation_filter``);
+# we no longer need a parallel scratchpad here.
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -254,6 +260,18 @@ def _build_parser() -> argparse.ArgumentParser:
             "Esc/Q cancel). Requires a TTY."
         ),
     )
+    select_group = parser.add_mutually_exclusive_group()
+    select_group.add_argument(
+        "--ai-select",
+        action="store_true",
+        help=(
+            "Use the LLM to decide which chapters deserve AI-generated "
+            "commentary before Stage 1 runs. Equivalent to "
+            "-i/--interactive for batch / CI scenarios where a TTY is "
+            "not available. Single LLM call; decisions are cached by "
+            "book. Mutually exclusive with -i/--interactive."
+        ),
+    )
     review_group = parser.add_mutually_exclusive_group()
     review_group.add_argument(
         "--review",
@@ -274,6 +292,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-review",
         action="store_true",
         help=("Skip the annotation review selector entirely and inject every generated annotation unconditionally."),
+    )
+    review_group.add_argument(
+        "--ai-review",
+        action="store_true",
+        help=(
+            "Use the LLM to decide which generated annotations are "
+            "worth injecting after Stage 2. Equivalent to --review for "
+            "batch / CI scenarios where a TTY is not available. Single "
+            "LLM call; decisions are cached by book. Mutually exclusive "
+            "with --review / --no-review."
+        ),
     )
     return parser
 
@@ -536,6 +565,35 @@ def _build_chapter_filter(args: argparse.Namespace) -> ChapterFilter | None:
     return _filter
 
 
+def _build_ai_chapter_filter(args: argparse.Namespace, llm: LLM, config: CommentConfig) -> ChapterFilter | None:
+    """Build the AI-driven chapter filter for ``--ai-select``.
+
+    Returns ``None`` when the flag is absent — :func:`comment_epub`
+    treats that as "process every chapter". Otherwise returns a callable
+    that invokes :func:`epub_commentor.llm.select.select_chapters` once
+    per book (a single LLM call covers all chapters) and yields a
+    parallel ``list[bool]`` mask.
+
+    The closure captures the decisions into
+    :data:`epub_commentor.commentor._AI_DECISION_SINKS["select"]` so
+    :func:`comment_epub` can snapshot them into :class:`CommentorResult`
+    and surface them in the summary panel after the run. TTY is
+    irrelevant — this flag is the batch / CI counterpart of
+    ``-i/--interactive``.
+    """
+    if not getattr(args, "ai_select", False):
+        return None
+
+    from .commentor import _AI_DECISION_SINKS
+
+    def _filter(chapters: list[Chapter], prompt_metadata: dict[str, str]) -> list[bool]:
+        mask, reasons = select_chapters(chapters, prompt_metadata, llm, config)
+        _AI_DECISION_SINKS["select"] = {i: (chapters[i].title, mask[i], reasons[i]) for i in range(len(chapters))}
+        return mask
+
+    return _filter
+
+
 def _annotation_preview(ann: ChapterAnnotation, max_chars: int = 60) -> str:
     """Render a short preview for the review picker's description column.
 
@@ -702,6 +760,37 @@ def _build_annotation_filter(args: argparse.Namespace) -> AnnotationFilter | Non
     return _filter
 
 
+def _build_ai_annotation_filter(args: argparse.Namespace, llm: LLM, config: CommentConfig) -> AnnotationFilter | None:
+    """Build the AI-driven annotation filter for ``--ai-review``.
+
+    Returns ``None`` when the flag is absent — :func:`comment_epub`
+    treats that as "inject every annotation unconditionally". Otherwise
+    returns a callable that invokes
+    :func:`epub_commentor.llm.review.review_annotations` once per book
+    (a single LLM call covers all chapters) and yields a parallel
+    ``list[bool]`` mask.
+
+    The closure captures the decisions into
+    :data:`epub_commentor.commentor._AI_DECISION_SINKS["review"]` so
+    :func:`comment_epub` can snapshot them into :class:`CommentorResult`
+    and surface them in the summary panel after the run. TTY is
+    irrelevant — this flag is the batch / CI counterpart of ``--review``.
+    """
+    if not getattr(args, "ai_review", False):
+        return None
+
+    from .commentor import _AI_DECISION_SINKS
+
+    def _filter(annotations: list[ChapterAnnotation], prompt_metadata: dict[str, str]) -> list[bool]:
+        mask, reasons = review_annotations(annotations, prompt_metadata, llm, config)
+        _AI_DECISION_SINKS["review"] = {
+            i: (annotations[i].chapter.title, mask[i], reasons[i]) for i in range(len(annotations))
+        }
+        return mask
+
+    return _filter
+
+
 def _clear_console() -> None:
     """Clear the terminal so the next phase renders on a tidy screen.
 
@@ -710,6 +799,45 @@ def _clear_console() -> None:
     """
     if sys.stderr.isatty():
         Console(file=sys.stderr).clear()
+
+
+def _ai_decision_panel(
+    decisions: dict[int, tuple[str, bool, str]] | None,
+    *,
+    title: str,
+) -> Panel | None:
+    """Build a ``Panel`` listing each AI decision (kept / dropped + reason).
+
+    Returns ``None`` when the filter never ran (no AI flag enabled) or when
+    every verdict was a keep — there's nothing to surface in either case,
+    and a successful AI run with zero drops reads as "the AI agreed with
+    us", which a chapter list under the summary already conveys.
+
+    Kept entries appear first (in spine order), then drops. Each row is
+    formatted as ``"<idx>. <title>  ·  <reason>"``; ``✓ kept`` / ``✗ dropped``
+    prefix mirrors the colour cue the rich-selector row uses so terminal
+    and AI panels feel visually consistent.
+    """
+    if not decisions:
+        return None
+    rows_kept: list[tuple[int, str, bool, str]] = []
+    rows_dropped: list[tuple[int, str, bool, str]] = []
+    for idx in sorted(decisions.keys()):
+        ch_title, include, reason = decisions[idx]
+        bucket = rows_kept if include else rows_dropped
+        bucket.append((idx, ch_title, include, reason))
+    if not rows_dropped and not rows_kept:
+        return None
+    grid = Table.grid(padding=(0, 1))
+    grid.add_column(justify="right", style="dim")
+    grid.add_column(overflow="fold")
+    body_rows: list[tuple[int, str, bool, str]] = rows_kept + rows_dropped
+    if not body_rows:
+        return None
+    for idx, ch_title, include, reason in body_rows:
+        prefix = "✓ kept" if include else "✗ dropped"
+        grid.add_row(f"{idx + 1}.", f"{ch_title}  ·  {prefix}  ·  {reason}")
+    return Panel(grid, title=title, expand=False)
 
 
 def _print_summary(result: CommentorResult, source: Path) -> None:
@@ -747,6 +875,13 @@ def _print_summary(result: CommentorResult, source: Path) -> None:
     console.print()
     console.print(Panel(stats, title="EPUB Commentor — summary", expand=False))
     console.print(Panel(chapters_body, title="Chapters processed", expand=False))
+
+    select_panel = _ai_decision_panel(result.ai_select_decisions, title="AI chapter selection — kept / dropped")
+    if select_panel is not None:
+        console.print(select_panel)
+    review_panel = _ai_decision_panel(result.ai_review_decisions, title="AI annotation review — kept / dropped")
+    if review_panel is not None:
+        console.print(review_panel)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -808,8 +943,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         stream_logs=args.stream_logs,
     )
 
-    chapter_filter = _build_chapter_filter(args)
-    annotation_filter = _build_annotation_filter(args)
+    chapter_filter = _build_chapter_filter(args) or _build_ai_chapter_filter(args, llm, config)
+    annotation_filter = _build_annotation_filter(args) or _build_ai_annotation_filter(args, llm, config)
 
     try:
         try:
