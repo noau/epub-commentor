@@ -927,20 +927,22 @@ jupyter = ["ipywidgets (>=7.5.1,<9)"]
 [[package]]
 name = "rich-selector"
 version = "0.1.0"
-description = ""
+description = "A Rich-based, synchronous, multi-select terminal widget."
 optional = false
 python-versions = ">=3.13"
 groups = ["main"]
 files = []
-develop = true
+develop = false
 
 [package.dependencies]
 readchar = ">=4.0"
 rich = ">=13.7"
 
 [package.source]
-type = "directory"
-url = "../rich-selector"
+type = "git"
+url = "https://github.com/noau/rich-selector.git"
+reference = "v0.1.0"
+resolved_reference = "424ca01b813123bccd5257f3bbea1935eaa1655d"
 
 [[package]]
 name = "ruff"
@@ -1127,4 +1129,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<3.14"
-content-hash = "66f9c58ffd57e398f5537895906f05ab5886ad89e8794870ff93ce96802ad6f0"
+content-hash = "4d1f92a1386e5c2a8da3c17d707b1e7418f6f7a578368ebb05e68206f4b65cc0"

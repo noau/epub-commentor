@@ -33,7 +33,7 @@ dependencies = [
     "openai>=2.14.0,<3.0.0",
     "pydantic>=2.5,<3.0",
     "rich>=13.0.0,<15.0.0",
-    "rich-selector @ file:///D:/Projects/rich-selector",
+    "rich-selector @ git+https://github.com/noau/rich-selector.git@v0.1.0",
 ]
 
 [project.scripts]
@@ -58,8 +58,6 @@ pytest = "^9.0.2"
 pyright = "^1.1.407"
 
 
-[tool.poetry.dependencies]
-rich-selector = {develop = true}
 [tool.ruff]
 line-length = 120
 target-version = "py313"
