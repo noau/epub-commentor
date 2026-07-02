@@ -35,6 +35,7 @@ from .errors import CommentAbortError, CommentorError
 from .llm import LLM
 from .llm._api_key import EPUB_COMMENTOR_API_KEY_ENV_VAR, resolve_api_key
 from .llm.schema import CommentKind, CommentPosition
+from .logging_setup import setup_root_logger
 from .pipeline import AnnotationFilter, ChapterAnnotation
 from .pipeline.extract import Chapter
 from .progress import make_default_progress_callback
@@ -151,6 +152,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Enable debug logging; defaults --log-dir to ./temp/logs/ if not set.",
     )
     parser.add_argument(
+        "--log-level",
+        type=str,
+        default="WARNING",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help=(
+            "Minimum level for the stream logger (default: WARNING). "
+            "Affects only --stream-logs / non-TTY output; rich progress "
+            "is unaffected."
+        ),
+    )
+    parser.add_argument(
+        "--log-format",
+        type=str,
+        default="text",
+        choices=["text", "json"],
+        help=(
+            "Stream logger record format (default: text). 'json' emits one "
+            "JSON object per line for log aggregators (Loki, Datadog, ...)."
+        ),
+    )
+    parser.add_argument(
+        "--log-stream",
+        type=str,
+        default="stderr",
+        choices=["stdout", "stderr"],
+        help="Stream the stream logger writes to (default: stderr).",
+    )
+    parser.add_argument(
+        "--stream-logs",
+        action="store_true",
+        help=(
+            "Disable rich progress and emit each ProgressEvent as a stream "
+            "log record. Auto-enabled when stderr is not a TTY. Combine "
+            "with --log-level=INFO --log-format=json for batch / cloud use."
+        ),
+    )
+    parser.add_argument(
         "--cache-user-id",
         type=str,
         default=None,
@@ -200,7 +238,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "-q",
         "--quiet",
         action="store_true",
-        help="Suppress the per-stage progress summary printed at the end.",
+        help=(
+            "Suppress ALL output (progress, summary, warnings). "
+            "For batch logging use --stream-logs --log-level=INFO instead."
+        ),
     )
     parser.add_argument(
         "-i",
@@ -751,8 +792,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Pipeline options: format.json values seed the config, CLI flags override.
     config = _build_config(args, base=config_from_json)
 
+    # Install the stream logger handler on the project namespace before
+    # any code path can emit log records. Idempotent — safe even if
+    # earlier invocations already attached one (e.g. in a long-lived
+    # test process).
+    setup_root_logger(
+        level=args.log_level,
+        fmt=args.log_format,
+        stream=args.log_stream,
+    )
+
     progress_quiet = args.quiet
-    progress_callback = make_default_progress_callback(quiet=progress_quiet)
+    progress_callback = make_default_progress_callback(
+        quiet=progress_quiet,
+        stream_logs=args.stream_logs,
+    )
 
     chapter_filter = _build_chapter_filter(args)
     annotation_filter = _build_annotation_filter(args)

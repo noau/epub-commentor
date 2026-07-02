@@ -164,6 +164,13 @@ class TestArgparseParser:
                 "--log-dir",
                 "logs",
                 "--debug",
+                "--log-level",
+                "INFO",
+                "--log-format",
+                "json",
+                "--log-stream",
+                "stdout",
+                "--stream-logs",
                 "--cache-user-id",
                 "bob",
                 "--target-language",
@@ -193,6 +200,10 @@ class TestArgparseParser:
         assert ns.cache_path == Path("cache")
         assert ns.log_dir == Path("logs")
         assert ns.debug is True
+        assert ns.log_level == "INFO"
+        assert ns.log_format == "json"
+        assert ns.log_stream == "stdout"
+        assert ns.stream_logs is True
         assert ns.cache_user_id == "bob"
         assert ns.target_language == "French"
         assert ns.css_path == Path("Styles/x.css")
@@ -246,6 +257,36 @@ class TestArgparseParser:
         with pytest.raises(SystemExit):
             parser.parse_args([])
         # argparse writes to stderr; we don't care about its exact text.
+
+    def test_stream_logs_flag_parsed(self) -> None:
+        parser = _build_parser()
+        ns = parser.parse_args(["book.epub", "--stream-logs"])
+        assert ns.stream_logs is True
+
+    def test_stream_logs_defaults_to_false(self) -> None:
+        parser = _build_parser()
+        ns = parser.parse_args(["book.epub"])
+        assert ns.stream_logs is False
+
+    def test_log_level_log_format_log_stream_defaults(self) -> None:
+        parser = _build_parser()
+        ns = parser.parse_args(["book.epub"])
+        assert ns.log_level == "WARNING"
+        assert ns.log_format == "text"
+        assert ns.log_stream == "stderr"
+
+    def test_quiet_with_stream_logs_quiet_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``--quiet`` overrides ``--stream-logs`` so cron users get zero output."""
+        from epub_commentor.progress import _NoOpDisplay, make_default_progress_callback
+
+        monkeypatch.setattr("sys.stderr.isatty", lambda: True)
+        cb = make_default_progress_callback(
+            quiet=True,
+            stream_logs=True,
+        )
+        assert isinstance(cb.__self__, _NoOpDisplay)
 
 
 # ---------------------------------------------------------------------------

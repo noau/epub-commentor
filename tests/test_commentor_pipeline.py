@@ -372,66 +372,70 @@ class TestProgressEvents:
         anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
         assert len(anns) == 1
 
-    def test_warn_events_emitted_on_block_skip(self) -> None:
+    def test_warn_events_emitted_on_block_skip(self, caplog: pytest.LogCaptureFixture) -> None:
         """When a Stage 2 block fails and ``fail_on_block_error=False``,
-        a ``stage="warn"`` event is emitted to the progress callback
-        (which the rich display renders via ``Console.log``)."""
+        a WARNING log record is emitted on the project logger (which the
+        stream logger handler in non-TTY / ``--stream-logs`` mode surfaces
+        on stderr). The old ``ProgressEvent(stage="warn", ...)`` was
+        deduped — there's a single source of truth now."""
         chapter = _mk_chapter(2)
         llm = MockLLM(
             responses_by_seed={"scan__response": _memo_json()},
             default_response="not json",
         )
         events: list[ProgressEvent] = []
-        process_chapters(
-            [chapter],
-            book_metadata={},
-            llm=llm,
-            config=CommentConfig(max_json_retries=1),
-            progress_callback=events.append,
-        )
-        warn_events = [e for e in events if e.stage == "warn"]
-        assert len(warn_events) == 1
-        assert "block" in (warn_events[0].message or "")
+        with caplog.at_level("WARNING", logger="epub_commentor.pipeline.process"):
+            process_chapters(
+                [chapter],
+                book_metadata={},
+                llm=llm,
+                config=CommentConfig(max_json_retries=1),
+                progress_callback=events.append,
+            )
+        warns = [r for r in caplog.records if r.name == "epub_commentor.pipeline.process"]
+        block_warns = [r for r in warns if "block" in r.getMessage()]
+        assert len(block_warns) == 1
         # The warn message must include the exception class name so the
         # user can see *why* the block was skipped without opening the
         # debug log file.
-        assert "CommentInvalidJSONError" in warn_events[0].message
+        assert "CommentInvalidJSONError" in block_warns[0].getMessage()
 
-    def test_warn_event_emitted_on_empty_chapter(self) -> None:
-        """An empty chapter (zero <p>) emits a ``stage="warn"`` event
-        so rich users see the skip (it previously only logged to the
-        Python logger)."""
+    def test_warn_event_emitted_on_empty_chapter(self, caplog: pytest.LogCaptureFixture) -> None:
+        """An empty chapter (zero <p>) emits a WARNING log record on
+        the project logger (the old warn ProgressEvent was deduped)."""
         chapter = _mk_chapter(0)
         llm = MockLLM()  # nothing should be called
         events: list[ProgressEvent] = []
-        process_chapters(
-            [chapter],
-            book_metadata={},
-            llm=llm,
-            config=CommentConfig(),
-            progress_callback=events.append,
-        )
-        warn_events = [e for e in events if e.stage == "warn"]
-        assert len(warn_events) == 1
-        assert "<p>" in (warn_events[0].message or "")
+        with caplog.at_level("WARNING", logger="epub_commentor.pipeline.process"):
+            process_chapters(
+                [chapter],
+                book_metadata={},
+                llm=llm,
+                config=CommentConfig(),
+                progress_callback=events.append,
+            )
+        warns = [r for r in caplog.records if r.name == "epub_commentor.pipeline.process"]
+        empty_warns = [r for r in warns if "<p>" in r.getMessage()]
+        assert len(empty_warns) == 1
 
-    def test_warn_event_emitted_on_scan_failure(self) -> None:
-        """A Stage 1 scan failure emits a warn event whose message
-        includes the underlying exception class name."""
+    def test_warn_event_emitted_on_scan_failure(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A Stage 1 scan failure emits a WARNING log record whose
+        message includes the underlying exception class name."""
         chapter = _mk_chapter(3)
         llm = MockLLM(default_response="not json")
         events: list[ProgressEvent] = []
-        process_chapters(
-            [chapter],
-            book_metadata={},
-            llm=llm,
-            config=CommentConfig(max_scan_retries=1),
-            progress_callback=events.append,
-        )
-        warn_events = [e for e in events if e.stage == "warn"]
-        assert len(warn_events) == 1
-        assert "scan failed" in warn_events[0].message
-        assert "CommentScanFailedError" in warn_events[0].message
+        with caplog.at_level("WARNING", logger="epub_commentor.pipeline.process"):
+            process_chapters(
+                [chapter],
+                book_metadata={},
+                llm=llm,
+                config=CommentConfig(max_scan_retries=1),
+                progress_callback=events.append,
+            )
+        warns = [r for r in caplog.records if r.name == "epub_commentor.pipeline.process"]
+        scan_warns = [r for r in warns if "scan failed" in r.getMessage()]
+        assert len(scan_warns) == 1
+        assert "CommentScanFailedError" in scan_warns[0].getMessage()
 
 
 class TestChapterFilter:

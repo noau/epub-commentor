@@ -47,6 +47,11 @@
   - [一次真实的首跑](#一次真实的首跑)
 - [交互式挑选章节](#交互式挑选章节)
 - [调整评注效果](#调整评注效果)
+- [免费 LLM 速率限制](#免费-llm-速率限制)
+- [批处理与云端运行](#批处理与云端运行)
+  - [批处理推荐 `format.json`](#批处理推荐-formatjson)
+  - [按场景区分的 CLI 模板](#按场景区分的-cli-模板)
+  - [输出处理建议](#输出处理建议)
 - [强制 JSON 输出](#强制-json-输出)
 - [命令参数一览](#命令参数一览)
 - [在你的设备上阅读](#在你的设备上阅读)
@@ -315,6 +320,120 @@ poetry run epub-commentor path/to/source.epub \
 
 ---
 
+## 批处理与云端运行
+
+把 epub-commentor 跑在服务器、CI 或批处理流水线里时,**交互式**默认行为会失灵:rich 进度条会把转义码写进日志文件,而 `--quiet` 会把**所有**输出(含软跳过警告)都吃掉。本节介绍专门为这种环境设计的旗标与配置。
+
+display 与 logging 是两套**正交**配置:
+
+| 关注点 | 旗标 | 何时调整 |
+|---|---|---|
+| **Display**(stderr 上的展示) | `--quiet`、`--stream-logs`、TTY 自动检测 | 选 rich bar / stream logger / 完全静默 |
+| **Logging 配置**(level / format / stream) | `--log-level`、`--log-format`、`--log-stream` | 压噪音或接日志聚合器 |
+
+TTY 用户可以同时开 `--log-level=INFO --log-format=json`,rich bar 照常显示;云端用户 `2> build.log` 走管道时会自动用 stream logger,无需额外旗标。
+
+### 批处理推荐 `format.json`
+
+下面是一份**完整、填好占位**的配置,直接拷贝改 key 即可:
+
+```json
+{
+  "url": "https://api.openai.com/v1",
+  "model": "gpt-4o-mini",
+  "token_encoding": "o200k_base",
+
+  "timeout": 600.0,
+  "retry_times": 5,
+  "retry_interval_seconds": 10.0,
+  "temperature": 0.4,
+  "top_p": 0.9,
+
+  "cache_path": "./commentary_cache",
+  "log_dir_path": "./run-logs",
+
+  "concurrency": 4,
+  "block_size": 6,
+  "target_language": "English",
+  "book_synopsis": "A philosophical fairy tale about a stranded pilot.",
+
+  "rpm_limit": 60,
+  "tpm_limit": 200000,
+  "request_concurrency": 4,
+  "token_count_buffer": 1.2
+}
+```
+
+字段说明:
+
+- **`timeout: 600.0`** —— 长章节可能跑几分钟,过紧的 timeout 会在 Stage 2 中途杀掉。
+- **`cache_path`** —— 让重试 / 重跑已经处理过的章节免费。
+- **`log_dir_path`** —— 把每次 LLM 请求的详细 trace 写到磁盘(`./run-logs/`),配合 `[[StageError]]` / `[[FinalError]]` 段做事后分析。
+- **`concurrency` 与 `request_concurrency`** —— 进程内并发 worker 数 vs 真正离开机器的 HTTP 请求数。上游有硬上限时**两个**都要设。
+- **不要写 `key` 字段** —— 用 `$EPUB_COMMENTOR_API_KEY` 环境变量提供 key(12-factor,可提交进仓库)。
+
+### 按场景区分的 CLI 模板
+
+下面的命令都假设 `format.json` 已就位,CLI 旗标按需覆盖默认值。
+
+**本地终端(rich bar,默认行为):**
+```bash
+poetry run epub-commentor book.epub
+# 无需额外旗标,自动检测 TTY
+```
+
+**云端服务器 / CI / 管道输出(结构化日志,无转义码):**
+```bash
+poetry run epub-commentor book.epub 2> build.log
+# 非 TTY 自动启用 _StreamLogDisplay
+# 默认 WARNING 级别,软跳过警告仍可见
+```
+
+**云端 + 完整事件流(每章进度,机器可解析):**
+```bash
+poetry run epub-commentor book.epub \
+  --log-level=INFO \
+  --log-format=json \
+  --stream-logs \
+  2> build.jsonl
+# 每个 ProgressEvent 对应一行 JSON:
+#   {"ts":"2026-07-02T14:23:01.123Z","level":"INFO",
+#    "logger":"epub_commentor.progress","message":"Chapter Three",
+#    "stage":"process","substage":"scan","current":3,"total":12}
+# 接 jq 过滤: cat build.jsonl | jq 'select(.stage=="warn")'
+```
+
+**定时任务 / 丢弃输出(零噪音):**
+```bash
+poetry run epub-commentor book.epub --quiet >/dev/null 2>&1
+# --quiet 真正静默——无进度、无总结、无警告
+# 想看日志用 --stream-logs --log-level=INFO 代替
+```
+
+**云端 + 可审计(详细 trace 落盘):**
+```bash
+poetry run epub-commentor book.epub \
+  --log-dir ./run-logs \
+  --log-level=INFO \
+  --log-format=json \
+  --stream-logs \
+  --log-stream=stdout \
+  > combined.jsonl 2> stderr.log
+# stdout  → 每个 ProgressEvent 一行 JSON
+# stderr  → 其他诊断(通常为空)
+# ./run-logs/ → 每次 LLM 请求的 trace,便于事后复盘
+```
+
+### 输出处理建议
+
+- **默认级别是 `WARNING`** —— 软跳过警告("chapter has zero `<p>`"、"block retries exhausted")仍会显示。加 `--log-level=INFO` 看每章进度,或 `--log-level=ERROR` 进一步压噪音。
+- **默认 stream 是 `stderr`** —— 12-factor 风格;stdout 留给未来可能的结构化结果输出。
+- **JSON extras 是顶层扁平字段** —— `stage`、`substage`、`current`、`total` 与 `message`、`level` 平级,`jq` 选择器无需拆包。
+- **非 TTY 自动检测可强制覆盖** —— TTY 下加 `--stream-logs` 强制走 stream logger(比如要 `tee` 落盘又不想让 bar 干扰日志格式)。
+- **`--quiet` 真的吃所有输出** —— 连 ERROR 都不显示。服务器上想看 ERROR 用 `--log-level=ERROR`(不要用 `--quiet`)。
+
+---
+
 ## 强制 JSON 输出
 
 Commentor 每次发给 LLM 的调用（章节概览、每个批次的评注）都期望拿回一个**合法 JSON object**。Prompt 里要求了 JSON、再加上 pydantic + 多轮 retry 兜底，可以清理绝大多数漏网之鱼——但你可以走更干脆的路：直接打开 API 级的 JSON 模式。
@@ -362,9 +481,13 @@ OpenAI、DeepSeek 以及大多数 OpenAI 兼容服务都支持一个参数，让
 | `--fail-on-empty-chapter` | 遇到无段落的章节时报错，而不是跳过。 |
 | `--log-dir DIR` | 把详细调试日志写到这个文件夹。 |
 | `--debug` | 开启调试日志（日志文件夹默认 `./temp/logs/`）。 |
+| `--log-level LVL` | stream logger 最低级别。可选 `DEBUG/INFO/WARNING/ERROR/CRITICAL`,默认 `WARNING`。详见[批处理与云端运行](#批处理与云端运行)。 |
+| `--log-format FMT` | stream logger 输出格式:`text`(默认)或 `json`。 |
+| `--log-stream STR` | stream logger 写入的流:`stdout` 或 `stderr`(默认)。 |
+| `--stream-logs` | 强制走 stream logger(非 TTY 时自动启用)。 |
 | `--cache-user-id ID` | 缓存命名空间。换个值可为新书/新用户强制重新生成。 |
 | `-i`, `--interactive` | 运行前从勾选列表挑选章节。 |
-| `-q`, `--quiet` | 关闭进度显示和结尾总结。 |
+| `-q`, `--quiet` | **完全静默**(连警告都吞掉)。详见[批处理与云端运行](#批处理与云端运行)。 |
 | `--rpm-limit N` | 每 60 秒窗口最多发几个请求。详见[速率限制](#免费-llm-速率限制)。 |
 | `--tpm-limit N` | 每 60 秒窗口最多消耗多少估算 token。 |
 | `--request-concurrency N` | 同时在飞的 HTTP 请求上限。 |
@@ -420,6 +543,7 @@ poetry run epub-commentor "book.epub" --synopsis "..." --debug
 | 速率限制错误 | 调小 `--concurrency`（试试 `2` 或 `1`）。 |
 | 某章没有评注 | 它可能没有真正的段落（封面或导航页）——这是正常的，会被跳过。用 `-i` 看清各章情况。 |
 | `--interactive requires a TTY` | 你在管道或脚本里用了 `-i`。去掉 `-i`，或在正常终端里运行。 |
+| `--quiet` 把警告也吞了 | 这是有意设计——`-q` 真正静默。服务器上想看警告用 `--stream-logs --log-level=WARNING`(默认就是这种行为)。 |
 
 ---
 

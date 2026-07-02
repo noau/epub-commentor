@@ -3,10 +3,27 @@
 The pipeline emits :class:`ProgressEvent` instances through a callback
 that the host application (CLI, notebook, library user) supplies. The
 default renderer installed by :func:`make_default_progress_callback`
-mounts those events onto a single :class:`rich.progress.Progress` with
-two task rows stacked vertically — the top row tracks chapter
-progress, the bottom row tracks block progress within the current
-chapter:
+selects one of three display classes based on the runtime context:
+
+================== ======================================================
+Context                       Display
+================== ======================================================
+``--quiet``                   :class:`_NoOpDisplay` (truly silent)
+``--stream-logs``             :class:`_StreamLogDisplay`
+non-TTY stderr                :class:`_StreamLogDisplay` (auto-detect)
+TTY + no flag                 :class:`RichProgressDisplay`
+================== ======================================================
+
+The two display dimensions — *logging config* (``--log-level``,
+``--log-format``, ``--log-stream`` via :mod:`epub_commentor.logging_setup`)
+and *display selection* (``--quiet``, ``--stream-logs``, TTY auto-detect)
+— are orthogonal so a TTY user can opt into chatty JSON logs without
+losing the rich progress bar.
+
+The :class:`RichProgressDisplay` mounts events onto a single
+:class:`rich.progress.Progress` with two task rows stacked vertically —
+the top row tracks chapter progress, the bottom row tracks block progress
+within the current chapter::
 
     ⠋ Ch. 3/28: The Little Prince   ████████░░░░░  3/28  02:34
     ⠙ (block 12/24)                 ██████░░░░░░░ 12/24  00:31
@@ -55,13 +72,12 @@ class ProgressEvent:
     string for forward compatibility. ``stage="warn"`` is the soft-skip
     notification channel — when a Stage 1 scan or Stage 2 annotate
     block fails and the pipeline is configured to keep going, the
-    process layer emits a warn event so the rich display can render
-    a single yellow line via ``Console.log`` (above the live progress
-    bar) without breaking the bar itself. The dataclass still accepts
-    any ``stage`` string for forward compatibility. Note: when the
-    no-op renderer is in use (quiet / non-TTY), warn events still
-    surface through the project logger so non-interactive runs see
-    soft-skip messages on stderr.
+    process layer emits a warn event. ``RichProgressDisplay`` renders
+    it via :meth:`rich.console.Console.log` above the live bar;
+    ``_StreamLogDisplay`` re-emits it as a ``logger.warning`` record so
+    non-TTY / cloud users see soft-skip messages through the standard
+    project logger. ``stage="done"`` is reserved for terminal events
+    (final progress callback before the bar closes).
     """
 
     stage: str
@@ -75,18 +91,64 @@ ProgressCallback = Callable[[ProgressEvent], None]
 
 
 class _NoOpDisplay:
-    """Drop-in renderer used when ``quiet=True`` or stderr is not a TTY.
+    """Truly silent renderer used when ``--quiet`` is set.
 
-    Progress events are dropped, but ``stage="warn"`` events are
-    surfaced through the project logger so non-TTY / quiet users still
-    see soft-skip messages on stderr (otherwise they'd only appear in
-    the debug log file, which most users never open).
+    Drops every event, including ``stage="warn"``. The ``--quiet`` flag
+    is the user saying "I want zero output" — even soft-skip warnings
+    are intentionally swallowed so cron / discarded-output scenarios
+    see exactly what they asked for. Users who want warnings but no
+    rich bar should pair ``--stream-logs --log-level=WARNING``.
     """
 
+    def update(self, event: ProgressEvent) -> None:  # pragma: no cover - trivial
+        return
+
+    def close(self) -> None:  # pragma: no cover - trivial
+        return
+
+
+class _StreamLogDisplay:
+    """Renderer that routes events to the project logger.
+
+    Used when the user opts into ``--stream-logs`` or when stderr is not
+    a TTY (piped / redirected). Each :class:`ProgressEvent` is mapped
+    onto a single :mod:`logging` call so the configured
+    :func:`~epub_commentor.logging_setup.setup_root_logger` handler —
+    text or JSON, stdout or stderr — gets exactly one record per event.
+    Rich and stream-logger are mutually exclusive: rich needs a TTY to
+    redraw; the stream logger needs a clean text stream so log lines
+    stay grep-friendly.
+
+    Event → log level mapping
+    -------------------------
+    ``stage="warn"``
+        :meth:`logging.Logger.warning` — soft-skip notifications.
+    ``stage="done"`` or ``stage ∈ {"process", "extract", "inject"}``
+        :meth:`logging.Logger.info` — normal progress.
+    Any other stage
+        :meth:`logging.Logger.info` — best-effort, forwarded as-is.
+    """
+
+    def _extras(self, event: ProgressEvent) -> dict[str, object]:
+        """Build the ``extra={...}`` payload carried alongside the log record."""
+        extras: dict[str, object] = {"stage": event.stage}
+        if event.substage is not None:
+            extras["substage"] = event.substage
+        if event.current:
+            extras["current"] = event.current
+        if event.total:
+            extras["total"] = event.total
+        if event.message is not None:
+            extras["message_event"] = event.message
+        return extras
+
     def update(self, event: ProgressEvent) -> None:
-        if event.stage == "warn" and event.message:
-            _logger.warning(event.message)
-        # Other events: dropped (matches "no progress output" promise).
+        message = event.message or ""
+        extras = self._extras(event)
+        if event.stage == "warn":
+            _logger.warning(message, extra=extras)
+        else:
+            _logger.info(message, extra=extras)
 
     def close(self) -> None:  # pragma: no cover - trivial
         return
@@ -100,7 +162,7 @@ class RichProgressDisplay:
     instance: ``chapter_task`` advances per chapter and ``block_task``
     advances per block. The bar columns are
     ``SpinnerColumn · TextColumn · BarColumn · MofNCompleteColumn ·
-    TimeRemainingColumn``; ``transient=False`` keeps both rows visible
+    TimeRemainingColumn``; ``transient=True`` keeps both rows visible
     after ``close()`` so the final 100% state is inspectable.
 
     Lifecycle
@@ -199,19 +261,30 @@ class RichProgressDisplay:
         self._console = None
 
 
-def make_default_progress_callback(quiet: bool = False) -> ProgressCallback:
+def make_default_progress_callback(
+    quiet: bool = False,
+    stream_logs: bool = False,
+) -> ProgressCallback:
     """Construct the renderer the CLI installs by default.
 
-    When ``quiet`` is True the returned callback is a no-op so the CLI
-    produces zero progress output. When stderr is not a TTY (e.g.
-    piped or redirected) the callback also degrades to a no-op so the
-    bar does not draw escape codes into logs. Otherwise the callback
-    drives a :class:`RichProgressDisplay`; the underlying renderer is
-    reachable via ``callback.__self__`` so callers can request a clean
-    shutdown.
+    Selection rules (in order):
+
+    1. ``quiet=True`` → :class:`_NoOpDisplay` (truly silent — drops
+       even warn events).
+    2. ``stream_logs=True`` or stderr is not a TTY →
+       :class:`_StreamLogDisplay` (each event becomes a log record
+       routed through the project logger).
+    3. Otherwise → :class:`RichProgressDisplay` (live two-row bar).
+
+    The returned callback is always a bound method, so callers can
+    invoke ``callback.__self__.close()`` for a clean shutdown — the
+    CLI's ``finally`` block relies on this for both the rich and
+    stream-log displays (``_StreamLogDisplay.close`` is a no-op).
     """
-    if quiet or not sys.stderr.isatty():
+    if quiet:
         return _NoOpDisplay().update
+    if stream_logs or not sys.stderr.isatty():
+        return _StreamLogDisplay().update
     return RichProgressDisplay().update
 
 

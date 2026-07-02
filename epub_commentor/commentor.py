@@ -20,7 +20,6 @@ double), so unit tests can drive the full stack without an OpenAI call.
 from __future__ import annotations
 
 import logging
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -230,9 +229,9 @@ def comment_epub(
         for the long-running LLM phase. Events are emitted with
         ``stage="process"`` and ``substage="scan"`` /
         ``substage="annotate"`` only. The ``extract`` and ``inject``
-        stages are short enough that ``commentor.py`` prints single
-        status lines to stderr directly; they do not flow through
-        this callback. The first event fires after any
+        stages are short enough that ``commentor.py`` emits single
+        ``INFO``-level records via the project logger; they do not
+        flow through this callback. The first event fires after any
         ``chapter_filter`` has returned, so interactive filters
         (e.g. rich-selector) never share terminal ownership with the
         progress renderer.
@@ -279,10 +278,10 @@ def comment_epub(
 
     install_sigint_handler()
     try:
-        print("Extracting chapters...", file=sys.stderr)
+        _logger.info("Extracting chapters...")
         with Zip(source_path, target_path) as z:
             chapters, book_metadata = extract_chapters(z)
-            print(f"Extracted {len(chapters)} chapter(s).", file=sys.stderr)
+            _logger.info("Extracted %d chapter(s).", len(chapters))
 
             # Optional user-supplied chapter filter: returns a parallel bool mask
             # where True[i] keeps chapter i and False[i] drops it from the run.
@@ -330,9 +329,9 @@ def comment_epub(
             filtered_annotations = _review_gate(annotations, annotation_filter, progress_callback)
             chapters_filtered = len(annotations) - len(filtered_annotations)
 
-            print("Injecting annotations...", file=sys.stderr)
+            _logger.info("Injecting annotations...")
             inject_annotations(zip=z, annotations=filtered_annotations, config=cfg, book_metadata=book_metadata)
-            print("Injection complete.", file=sys.stderr)
+            _logger.info("Injection complete.")
 
         # ``chapters_skipped`` is computed from the *original* annotations
         # (pre-gate) because pipeline skips are a property of the input, not

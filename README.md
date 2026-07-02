@@ -46,6 +46,11 @@
   - [A realistic first run](#a-realistic-first-run)
 - [Choosing chapters interactively](#choosing-chapters-interactively)
 - [Tuning the commentary](#tuning-the-commentary)
+- [Rate limiting for free LLM tiers](#rate-limiting-for-free-llm-tiers)
+- [Batch & cloud processing](#batch--cloud-processing)
+  - [Recommended `format.json` for batch jobs](#recommended-formatjson-for-batch-jobs)
+  - [CLI presets by scenario](#cli-presets-by-scenario)
+  - [Output handling](#output-handling)
 - [Forcing JSON output](#forcing-json-output)
 - [Command reference](#command-reference)
 - [Reading the result on your device](#reading-the-result-on-your-device)
@@ -314,6 +319,120 @@ Notes:
 
 ---
 
+## Batch & cloud processing
+
+When you run Commentor on a server, in a CI job, or as part of a batch pipeline, the **interactive** defaults break down: rich progress bars draw escape codes into log files, and `--quiet` silences *everything* including soft-skip warnings. This section covers the dedicated flags and configs designed for that environment.
+
+The two display modes are now independent of the three logging knobs:
+
+| Concern | Flags | When to change |
+|---|---|---|
+| **Display** (what shows on stderr) | `--quiet`, `--stream-logs`, TTY auto-detect | Pick rich bar / stream logs / silence |
+| **Logging config** (level / format / stream) | `--log-level`, `--log-format`, `--log-stream` | Tame noise or feed a log aggregator |
+
+A TTY user can pass `--log-level=INFO --log-format=json` and still get the rich bar. A cloud user piping `2> build.log` gets the stream logger automatically — no extra flag needed.
+
+### Recommended `format.json` for batch jobs
+
+This is a complete, ready-to-fill config for unattended runs on a server:
+
+```json
+{
+  "url": "https://api.openai.com/v1",
+  "model": "gpt-4o-mini",
+  "token_encoding": "o200k_base",
+
+  "timeout": 600.0,
+  "retry_times": 5,
+  "retry_interval_seconds": 10.0,
+  "temperature": 0.4,
+  "top_p": 0.9,
+
+  "cache_path": "./commentary_cache",
+  "log_dir_path": "./run-logs",
+
+  "concurrency": 4,
+  "block_size": 6,
+  "target_language": "English",
+  "book_synopsis": "A philosophical fairy tale about a stranded pilot.",
+
+  "rpm_limit": 60,
+  "tpm_limit": 200000,
+  "request_concurrency": 4,
+  "token_count_buffer": 1.2
+}
+```
+
+Notes on the choices:
+
+- **`timeout: 600.0`** — long chapters can take minutes; a tight timeout aborts in the middle of Stage 2.
+- **`cache_path`** — makes every retry / re-run free on cached chapters.
+- **`log_dir_path`** — keeps per-request debug logs for post-mortem (`./run-logs/`). Pair with `[[StageError]]` / `[[FinalError]]` segments.
+- **`concurrency` vs `request_concurrency`** — workers in flight inside the process vs HTTP requests that actually leave the box. Set both when the upstream has a hard cap.
+- **No `key` field** — provide the API key via `$EPUB_COMMENTOR_API_KEY` (12-factor, safe to commit).
+
+### CLI presets by scenario
+
+The defaults below assume the `format.json` above is in place; the CLI flags override those defaults per-run.
+
+**Local terminal (rich bar, default behavior):**
+```bash
+poetry run epub-commentor book.epub
+# nothing extra; auto-detects TTY
+```
+
+**Cloud server / CI / piped output (structured logs, no escape codes):**
+```bash
+poetry run epub-commentor book.epub 2> build.log
+# auto-detects non-TTY → uses _StreamLogDisplay
+# default level is WARNING → soft-skip warnings still visible
+```
+
+**Cloud server with full event trace (per-chapter progress, machine-parseable):**
+```bash
+poetry run epub-commentor book.epub \
+  --log-level=INFO \
+  --log-format=json \
+  --stream-logs \
+  2> build.jsonl
+# Each ProgressEvent becomes one JSON object per line:
+#   {"ts":"2026-07-02T14:23:01.123Z","level":"INFO",
+#    "logger":"epub_commentor.progress","message":"Chapter Three",
+#    "stage":"process","substage":"scan","current":3,"total":12}
+# Pipe into jq: cat build.jsonl | jq 'select(.stage=="warn")'
+```
+
+**Cron job / discarded output (zero noise):**
+```bash
+poetry run epub-commentor book.epub --quiet >/dev/null 2>&1
+# -q means truly silent — no progress, no summary, no warnings.
+# For batch logging use --stream-logs --log-level=INFO instead.
+```
+
+**Cloud retry (audit-friendly, debug logs on disk):**
+```bash
+poetry run epub-commentor book.epub \
+  --log-dir ./run-logs \
+  --log-level=INFO \
+  --log-format=json \
+  --stream-logs \
+  --log-stream=stdout \
+  > combined.jsonl 2> stderr.log
+# stdout  → one JSON record per ProgressEvent
+# stderr  → unrelated diagnostics (rare)
+# ./run-logs/ → per-request LLM trace for post-mortem
+```
+
+### Output handling
+
+- **Default level is `WARNING`** — soft-skip warnings ("chapter has zero `<p>`", "block retries exhausted") still surface. Pass `--log-level=INFO` for per-chapter visibility, or `--log-level=ERROR` to suppress even warns.
+- **Default stream is `stderr`** — matches 12-factor convention; stdout stays free for future structured result output.
+- **JSON extras are flat top-level fields** — `stage`, `substage`, `current`, `total` are siblings of `message` and `level`, so `jq` selectors work without unwrapping. See [the JsonFormatter section](#json-output-mode) for the schema.
+- **Non-TTY auto-detect is opt-out-able** — pass `--stream-logs` to force the stream logger even on a TTY (useful when piping through `tee` and you want clean log lines on the file even with the bar on screen).
+- **`--quiet` truly silences everything** — even ERROR-level records. For ERROR-only visibility on a server, set `--log-level=ERROR` (don't use `--quiet`).
+
+---
+
 ## Forcing JSON output
 
 Every LLM call Commentor makes (the chapter overview and each block's annotation) expects a **valid JSON object** back from the model. The prompts ask for it in text, and pydantic + a multi-turn retry loop clean up whatever slips through — but you can short-circuit that whole detour by turning on the API-level JSON mode.
@@ -361,9 +480,13 @@ Run `poetry run epub-commentor --help` any time for the authoritative list. Ever
 | `--fail-on-empty-chapter` | Stop with an error on a chapter that has no paragraphs, instead of skipping it. |
 | `--log-dir DIR` | Write detailed debug logs to this folder. |
 | `--debug` | Turn on debug logging (defaults the log folder to `./temp/logs/`). |
+| `--log-level LVL` | Minimum level for the stream logger. One of `DEBUG/INFO/WARNING/ERROR/CRITICAL`. Default `WARNING`. See [Batch & cloud processing](#batch--cloud-processing). |
+| `--log-format FMT` | Stream logger format: `text` (default) or `json`. |
+| `--log-stream STR` | Stream the logger writes to: `stdout` or `stderr` (default). |
+| `--stream-logs` | Force the stream-logger display (auto-enabled when stderr is not a TTY). |
 | `--cache-user-id ID` | Namespace for the cache. Change it to force fresh results for a new book/user. |
 | `-i`, `--interactive` | Pick chapters from a checklist before running. |
-| `-q`, `--quiet` | Suppress the progress display and final summary. |
+| `-q`, `--quiet` | Suppress **all** output (truly silent, including warnings). See [Batch & cloud processing](#batch--cloud-processing). |
 | `--rpm-limit N` | Max LLM requests per 60s window. See [Rate limiting](#rate-limiting-for-free-llm-tiers). |
 | `--tpm-limit N` | Max estimated LLM tokens per 60s window. |
 | `--request-concurrency N` | Max simultaneous in-flight LLM HTTP calls. |
@@ -419,6 +542,7 @@ Each log file records the full request, the raw response, and — if a batch had
 | Rate-limit errors | Lower `--concurrency` (try `2` or `1`). |
 | A chapter got no notes | It may have no real paragraphs (a cover or nav page) — that's normal and it's skipped. Use `-i` to see what's what. |
 | `--interactive requires a TTY` | You ran `-i` in a pipe or script. Drop `-i`, or run it in a normal terminal. |
+| `--quiet` swallowed my warnings | That's by design — `-q` is truly silent. For warnings on a server, use `--stream-logs --log-level=WARNING` (the default). |
 
 ---
 

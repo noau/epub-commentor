@@ -151,16 +151,12 @@ def _process_chapter(
         msg = f"chapter has zero <p> elements, skipping: {chapter.path.as_posix()}"
         if getattr(config, "fail_on_empty_chapter", False):
             raise CommentNoParagraphsError(msg)
+        # Soft-skip notification. Surfaces through the project logger
+        # (which the CLI's ``setup_root_logger`` configures); rich bar
+        # users also see it via ``--stream-logs``. Deduped from the old
+        # ``ProgressEvent(stage="warn")`` path so we have one source of
+        # truth and --quiet truly silences everything.
         _logger.warning(msg)
-        _emit(
-            progress_callback,
-            ProgressEvent(
-                stage="warn",
-                current=0,
-                total=0,
-                message=f"Chapter {chapter.title}: no <p> elements → skipped",
-            ),
-        )
         return ChapterAnnotation(chapter=chapter, memo=_empty_memo(), comments=[]), 0
 
     prompt_metadata = {k: v for k, v in book_metadata.items() if k not in _RESERVED_METADATA_KEYS}
@@ -175,22 +171,16 @@ def _process_chapter(
         )
     except CommentScanFailedError as exc:
         msg = (
-            f"Chapter `{chapter.path.as_posix()}` Stage 1 scan failed"
-            f"(fail_on_block_error=False → skipping chapter): {exc}"
+            f"Chapter `{chapter.path.as_posix()}` Stage 1 scan failed "
+            f"({type(exc).__name__}: {exc}) "
+            f"(fail_on_block_error=False → skipping chapter)"
         )
         if getattr(config, "fail_on_block_error", False):
             _logger.error(msg)
             raise
+        # Soft-skip notification; see empty-chapter branch above for the
+        # single-channel rationale (logger only, no ProgressEvent).
         _logger.warning(msg)
-        _emit(
-            progress_callback,
-            ProgressEvent(
-                stage="warn",
-                current=0,
-                total=0,
-                message=f"Chapter {chapter.title}: scan failed → skipped ({type(exc).__name__}: {exc})",
-            ),
-        )
         # Reuse the empty-chapter placeholder so the chapter counts in
         # chapters_skipped via the existing _is_chapter_skipped prefix.
         return ChapterAnnotation(chapter=chapter, memo=_empty_memo(), comments=[]), 0
@@ -250,24 +240,15 @@ def _process_chapter(
                 msg = (
                     f"Stage 2 annotate failed for block starting at p_id {block_start} "
                     f"in {chapter.path.as_posix()} after retries "
-                    f"(fail_on_block_error={fail_block_error}): {exc}"
+                    f"({type(exc).__name__}: {exc}) "
+                    f"(fail_on_block_error={fail_block_error})"
                 )
                 if fail_block_error:
                     _logger.error(msg)
                     raise
+                # Soft-skip notification; see empty-chapter branch above
+                # for the single-channel rationale.
                 _logger.warning(msg)
-                _emit(
-                    progress_callback,
-                    ProgressEvent(
-                        stage="warn",
-                        current=0,
-                        total=0,
-                        message=(
-                            f"Chapter {chapter.title} block @ p_id {block_start} → skipped "
-                            f"(retries exhausted: {type(exc).__name__})"
-                        ),
-                    ),
-                )
                 blocks_skipped += 1
                 chapter_tainted = True
                 block_succeeded = False
@@ -317,15 +298,6 @@ def _process_chapter(
             "chapter tainted by block failures / empty results, "
             "skip_chapter_on_empty_annotation=True → marking chapter as skipped: %s",
             chapter.path.as_posix(),
-        )
-        _emit(
-            progress_callback,
-            ProgressEvent(
-                stage="warn",
-                current=0,
-                total=0,
-                message=f"Chapter {chapter.title}: chapter tainted → skipped",
-            ),
         )
         # Replace memo with the placeholder so _is_chapter_skipped picks it up,
         # but preserve the per-block metrics so the review gate can still show them.
