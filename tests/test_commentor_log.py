@@ -150,6 +150,71 @@ class TestCacheCheckLogging:
         assert "hit=false" in log_text
 
 
+class TestCacheEvictAlongsideStageError:
+    """Verify ``[[CacheEvict]]`` lands in the same log file as ``[[StageError]]``.
+
+    Simulates the production retry-loop pattern manually against a real
+    :class:`LLMContext` + stub executor: the LLM returns garbage every
+    time, the retry-loop calls ``ctx.discard_last()`` after each failed
+    validation, and we confirm the per-request log file ends up with
+    one ``[[StageError]]`` + one ``[[CacheEvict]]`` per attempt.
+    """
+
+    def test_cache_evict_written_alongside_stage_error(self, tmp_path: Path) -> None:
+        from pydantic import BaseModel, ValidationError
+
+        from epub_commentor.llm.context import LLMContext
+        from epub_commentor.llm.increasable import Increasable
+        from epub_commentor.llm.types import Message, MessageRole
+
+        class _StrictModel(BaseModel):
+            """A model the executor's garbage response will never satisfy."""
+
+            must_be_present: str
+
+        class _GarbageExecutor:
+            def request(self, messages, max_tokens, temperature, top_p, cache_key, logger=None):  # noqa: ARG002
+                if logger is not None:
+                    logger.debug("[[Parameters]]:\n\t\ntemperature=None\n")
+                    logger.debug("[[Request]]:\nSystem:\ns\nUser:\nu\n")
+                    logger.debug("[[Response]]:\nresponse-body\n")
+                return "not json at all"  # always fails validation
+
+        cache_path = tmp_path / "cache"
+        log_dir = tmp_path / "logs"
+        ctx = LLMContext(
+            executor=_GarbageExecutor(),
+            cache_path=cache_path,
+            cache_seed_content="seed-x",
+            top_p=Increasable(None),
+            temperature=Increasable(None),
+            create_logger=lambda: _make_logger(log_dir),
+        )
+
+        with ctx as entered:
+            for attempt in range(2):
+                raw = entered.request([Message(MessageRole.SYSTEM, "s"), Message(MessageRole.USER, "u")])
+                try:
+                    _StrictModel.model_validate_json(raw)
+                except ValidationError as exc:
+                    if entered.logger is not None:
+                        entered.logger.warning(
+                            f"[[StageError]] stage=annotate; "
+                            f"attempt={attempt + 1}/2; "
+                            f"error={type(exc).__name__}: {exc}\n"
+                        )
+                    # Mirror the production retry loop's eviction call.
+                    entered.discard_last()
+
+        log_text = _collect_log_text(log_dir)
+        # Both sections coexist in the same log file.
+        assert log_text.count("[[StageError]]") == 2
+        assert log_text.count("[[CacheEvict]]") == 2
+        assert "reason=validation_failed" in log_text
+        # And the cache stayed empty — no permanent file was committed.
+        assert list(cache_path.glob("*.txt")) == []
+
+
 def _make_logger(log_dir: Path):
     """Build a debug logger against ``log_dir`` using the shared helper."""
     from epub_commentor.llm._debug_logger import make_request_logger

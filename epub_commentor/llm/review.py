@@ -234,6 +234,10 @@ def review_annotations(
                 return mask, reasons
             except (ValidationError, ValueError) as exc:
                 last_error = exc
+                # Drop this invalid response from the cache: it would
+                # otherwise be committed at __exit__ and replayed on
+                # any subsequent run that re-enters this exact input.
+                ctx.discard_last()
                 if ctx.logger is not None:
                     ctx.logger.warning(
                         f"[[StageError]] stage=review; "

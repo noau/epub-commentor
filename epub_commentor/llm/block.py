@@ -178,6 +178,10 @@ def annotate_block(
                     return validate_block_annotations(parsed, block_size=len(block_ps))
                 except (ValidationError, CommentOrphanPIdError, CommentOverlapError) as exc:
                     last_error = exc
+                    # Drop this invalid response from the cache: it would
+                    # otherwise be committed at __exit__ and replayed on
+                    # any subsequent run that re-enters this exact input.
+                    ctx.discard_last()
                     # model_validate_json may have failed (raw was not
                     # even valid JSON) — in that case we don't have a
                     # parsed object to feed the salvage pass.

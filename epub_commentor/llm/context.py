@@ -34,6 +34,12 @@ class LLMContext:
         self._temperature: Increaser = temperature.context()
         self._context_id = uuid.uuid4().hex[:12]
         self._temp_files: set[Path] = set()
+        # Tracks the cache key of the most recent ``request()`` call so
+        # retry loops can drop the corresponding entry on validation
+        # failure (see :meth:`discard_last`). Reset to ``None`` after
+        # each ``request()`` so a stale key from a prior attempt cannot
+        # accidentally evict a still-valid response.
+        self._last_cache_key: str | None = None
         # ``create_logger`` returns a fresh FileHandler each invocation;
         # we call it once per context so retries share one log file.
         self._create_logger = create_logger
@@ -90,6 +96,11 @@ class LLMContext:
             cache_key: str | None = None
             if self._cache_path is not None:
                 cache_key = self._compute_messages_hash(messages)
+                # Remember this key so a subsequent ``discard_last()`` (e.g.
+                # called from a retry-loop except block) can target the same
+                # entry — regardless of whether the current call hit or
+                # missed the cache.
+                self._last_cache_key = cache_key
                 permanent_cache_file = self._cache_path / f"{cache_key}.txt"
                 if permanent_cache_file.exists():
                     if self._logger is not None:
@@ -155,3 +166,43 @@ class LLMContext:
         for temp_file in self._temp_files:
             if temp_file.exists():
                 temp_file.unlink()
+
+    def discard_last(self) -> None:
+        """Discard the cache entry for the most recent :meth:`request` call.
+
+        Used by retry-loop except blocks (Stage 1/2 + AI gates) to keep
+        invalid LLM responses from poisoning the on-disk cache. Two
+        scenarios are covered:
+
+        - **Cache miss (this run wrote a temp file)** — the temp file is
+          removed from :attr:`_temp_files` and unlinked on disk so
+          :meth:`_commit` cannot rename it to a permanent entry.
+        - **Cache hit (this run read an existing poisoned permanent
+          file)** — that permanent ``{cache_key}.txt`` is unlinked so a
+          future run gets a fresh response from the executor instead of
+          replaying the historical garbage.
+
+        A no-op when caching is disabled, or before any ``request()``
+        has been issued, or after a previous ``discard_last()`` cleared
+        the key. Writes a ``[[CacheEvict]]`` section to the per-context
+        logger so a post-mortem of a failed run shows the eviction
+        alongside the existing ``[[StageError]]`` / ``[[FinalError]]``
+        entries.
+        """
+        if self._cache_path is None or self._last_cache_key is None:
+            return
+        cache_key = self._last_cache_key
+        # Serialise against ``_commit`` so a concurrent context cannot
+        # rename a temp file we're about to unlink (and vice versa).
+        with _CACHE_COMMIT_LOCK:
+            permanent_file = self._cache_path / f"{cache_key}.txt"
+            if permanent_file.exists():
+                permanent_file.unlink()
+            temp_file = self._cache_path / f"{cache_key}.{self._context_id}.txt"
+            self._temp_files.discard(temp_file)
+            if temp_file.exists():
+                temp_file.unlink()
+        if self._logger is not None:
+            self._logger.warning(f"[[CacheEvict]] cache_key={cache_key[:12]}; reason=validation_failed\n")
+        # Clear so a subsequent stray ``discard_last()`` is a safe no-op.
+        self._last_cache_key = None

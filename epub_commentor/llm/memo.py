@@ -116,6 +116,10 @@ def scan_chapter(
                 return ChapterMemo.model_validate_json(raw)
             except ValidationError as exc:
                 last_error = exc
+                # Drop this invalid response from the cache: it would
+                # otherwise be committed at __exit__ and replayed on
+                # any subsequent run that re-enters this exact input.
+                ctx.discard_last()
                 if ctx.logger is not None:
                     ctx.logger.warning(
                         f"[[StageError]] stage=scan; "

@@ -36,6 +36,16 @@ class ContextProtocol(Protocol):
 
     def request(self, input: Any = None, **kwargs: Any) -> str: ...
 
+    def discard_last(self) -> None:
+        """Drop the cache entry written or read by the most recent ``request()``.
+
+        No-op when caching is disabled or before any ``request()`` has
+        been issued. Retry loops (Stage 1 / Stage 2 / AI gates) call this
+        from their ``except`` block to prevent invalid responses from
+        poisoning the on-disk cache.
+        """
+        ...
+
     @property
     def logger(self) -> Logger | None: ...
 

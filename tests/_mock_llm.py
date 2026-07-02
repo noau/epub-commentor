@@ -105,6 +105,14 @@ class _MockLLMContext:
         self._parent.calls.append(_MockCall(self._cache_seed, messages, response))
         return response
 
+    def discard_last(self) -> None:
+        """No-op — the mock has no on-disk cache to evict.
+
+        Kept so :class:`ContextProtocol` is satisfied and so a future
+        mock-with-disk-cache change can wire this through without
+        touching any caller.
+        """
+
 
 class MockLLM:
     """A configurable LLM double.
