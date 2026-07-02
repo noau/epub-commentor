@@ -37,7 +37,7 @@ jobs:
             --python-version 313 \
             --platform manylinux2014_x86_64 \
             --console-script epub-commentor \
-            --output epub-commentor \
+            --output-file epub-commentor \
             .
 
       - name: Smoke test (--help)
