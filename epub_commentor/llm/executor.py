@@ -8,6 +8,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from ..errors import CommentAbortError
 from ._abort import is_abort_requested
 from .error import is_retry_error
+from .rate_limiter import LLMRateLimiter
 from .statistics import Statistics
 from .types import Message, MessageRole
 
@@ -23,6 +24,7 @@ class LLMExecutor:
         retry_interval_seconds: float,
         statistics: Statistics,
         extra_body: dict[str, object] | None = None,
+        rate_limiter: LLMRateLimiter | None = None,
     ) -> None:
         self._model_name: str = model
         self._timeout: float | None = timeout
@@ -30,6 +32,7 @@ class LLMExecutor:
         self._retry_interval_seconds: float = retry_interval_seconds
         self._statistics = statistics
         self._extra_body: dict[str, object] | None = extra_body
+        self._rate_limiter: LLMRateLimiter | None = rate_limiter
         self._client = OpenAI(
             api_key=api_key,
             base_url=url,
@@ -154,6 +157,26 @@ class LLMExecutor:
         return buffer.getvalue()
 
     def _invoke_model(
+        self,
+        input_messages: list[Message],
+        top_p: float | None,
+        temperature: float | None,
+        max_tokens: int | None,
+    ) -> str:
+        # Gate every HTTP attempt through the rate limiter so retries
+        # also count against RPM / TPM / concurrency. The semaphore is
+        # acquired *before* the budget wait so the slowest gate (network)
+        # holds the in-flight slot, not a worker that's just sleeping.
+        if self._rate_limiter is not None:
+            estimated = self._rate_limiter.estimate_tokens(input_messages)
+            self._rate_limiter.acquire(estimated)
+        try:
+            return self._do_invoke(input_messages, top_p, temperature, max_tokens)
+        finally:
+            if self._rate_limiter is not None:
+                self._rate_limiter.release()
+
+    def _do_invoke(
         self,
         input_messages: list[Message],
         top_p: float | None,

@@ -134,6 +134,13 @@ class MockLLM:
         responses_by_seed: dict[str, str] | None = None,
         default_response: str | None = None,
         log_dir_path: Path | str | None = None,
+        # Rate-limit knobs are accepted for source-level compatibility
+        # with :class:`LLM` but the mock never invokes an HTTP executor,
+        # so the values are stored and ignored — production-only fields.
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        request_concurrency: int | None = None,
+        token_count_buffer: float = 1.2,
     ) -> None:
         self.responses_by_seed = dict(responses_by_seed or {})
         self.default_response = default_response
@@ -144,6 +151,13 @@ class MockLLM:
         # between the mock and the real thing.
         self._env = create_env(self._prompts_path())
         self._log_dir_path = Path(log_dir_path) if log_dir_path is not None else None
+        # Stash the rate-limit knobs so tests can assert on them; the
+        # mock's _MockLLMContext.request never goes through an executor,
+        # so no gate is ever acquired.
+        self._rpm_limit = rpm_limit
+        self._tpm_limit = tpm_limit
+        self._request_concurrency = request_concurrency
+        self._token_count_buffer = token_count_buffer
 
     @staticmethod
     def _prompts_path() -> Any:

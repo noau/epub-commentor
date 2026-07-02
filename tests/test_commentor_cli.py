@@ -70,6 +70,9 @@ class TestBuildConfig:
             skip_chapter_on_empty_annotation=False,
             log_dir=None,
             debug=False,
+            rpm_limit=None,
+            tpm_limit=None,
+            request_concurrency=None,
         )
         cfg = _build_config(ns)
         assert isinstance(cfg, CommentConfig)
@@ -96,6 +99,9 @@ class TestBuildConfig:
             skip_chapter_on_empty_annotation=True,
             log_dir=Path("logs"),
             debug=True,
+            rpm_limit=30,
+            tpm_limit=100000,
+            request_concurrency=2,
         )
         cfg = _build_config(ns)
         assert cfg.book_synopsis == "A book"
@@ -141,6 +147,12 @@ class TestArgparseParser:
                 "8",
                 "--concurrency",
                 "2",
+                "--rpm-limit",
+                "30",
+                "--tpm-limit",
+                "100000",
+                "--request-concurrency",
+                "2",
                 "--max-json-retries",
                 "5",
                 "--max-scan-retries",
@@ -171,6 +183,9 @@ class TestArgparseParser:
         assert ns.synopsis == "hello"
         assert ns.block_size == 8
         assert ns.concurrency == 2
+        assert ns.rpm_limit == 30
+        assert ns.tpm_limit == 100000
+        assert ns.request_concurrency == 2
         assert ns.max_json_retries == 5
         assert ns.max_scan_retries == 6
         assert ns.cache_path == Path("cache")
@@ -187,6 +202,30 @@ class TestArgparseParser:
         assert ns.interactive is True
         assert ns.review is True
         assert ns.no_review is False
+
+    def test_rate_limit_flags_parsed(self) -> None:
+        parser = _build_parser()
+        ns = parser.parse_args(
+            [
+                "book.epub",
+                "--rpm-limit",
+                "60",
+                "--tpm-limit",
+                "200000",
+                "--request-concurrency",
+                "2",
+            ]
+        )
+        assert ns.rpm_limit == 60
+        assert ns.tpm_limit == 200000
+        assert ns.request_concurrency == 2
+
+    def test_rate_limit_flags_default_to_none(self) -> None:
+        parser = _build_parser()
+        ns = parser.parse_args(["book.epub"])
+        assert ns.rpm_limit is None
+        assert ns.tpm_limit is None
+        assert ns.request_concurrency is None
 
     def test_no_review_flag_accepted(self) -> None:
         parser = _build_parser()

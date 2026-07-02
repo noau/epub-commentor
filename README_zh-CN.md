@@ -128,6 +128,10 @@ cp format.template.json format.json
 | `top_p` | 否 | temperature 的替代项（核采样）。 | 保持 `0.9` 即可，或填 `null` 忽略它。 |
 | `cache_path` | 否 | 存放响应的文件夹，让重跑免费。 | 见[用缓存省钱](#用缓存省钱)。留空或 `null` 表示不缓存。 |
 | `log_dir_path` | 否 | 存放调试日志的文件夹。 | `null` = 关闭。见[出问题时怎么办](#出问题时怎么办)。 |
+| `rpm_limit` | 否 | 每 60 秒滑动窗口内最多发多少请求。 | `null` = 不限。详见[免费 LLM 速率限制](#免费-llm-速率限制)。 |
+| `tpm_limit` | 否 | 每 60 秒滑动窗口内最多消耗多少估算 token。 | `null` = 不限。token 数通过 `token_encoding` 估算并加安全余量。 |
+| `request_concurrency` | 否 | 同时在飞的 HTTP 请求上限。 | `null` = 不限。设为服务端的硬并发上限（例如 GLM-4-flash-250414 免费档为 `2`）。 |
+| `token_count_buffer` | 否 | 套在 tiktoken 估算值上的安全乘数（默认 `1.2`）。 | 设置了 `tpm_limit` 后仍出现 `429` 时，调大它。 |
 
 ### 服务商示例
 
@@ -233,6 +237,48 @@ poetry run epub-commentor "book.epub" --synopsis "..." -i
 
 ---
 
+## 免费 LLM 速率限制
+
+当你把 Commentor 接到免费档 LLM（如 Zhipu / GLM，或任何有 per-key 硬上限的服务）时，如果发得比配额快，模型就会抛 `429 Too Many Requests`。三个速率限制旋钮都封装在 **`LLM` 类内部**，CLI、脚本、Python 调用方都自动受惠：
+
+| 旋钮 | 默认 | 控制什么 |
+|---|---|---|
+| `rpm_limit` | `null`（不限） | 滚动 60 秒窗口内最多发多少请求。 |
+| `tpm_limit` | `null`（不限） | 滚动 60 秒窗口内最多消耗多少估算 token。通过 `tiktoken` + `1.2x` 安全余量估算，让非 OpenAI 分词器（GLM 等）安全留在配额内。 |
+| `request_concurrency` | `null`（不限） | 同时在飞的 HTTP 请求上限。这是**服务端**硬并发——例如 `glm-4-flash-250414` 免费档为 `2`。 |
+
+命令行设置：
+
+```bash
+poetry run epub-commentor path/to/source.epub \
+  --synopsis "..." \
+  --rpm-limit 60 --tpm-limit 200000 --request-concurrency 2
+```
+
+或在 `format.json` 里持久化：
+
+```json
+{
+  "key": "...",
+  "url": "https://open.bigmodel.cn/api/paas/v4/",
+  "model": "glm-4-flash-250414",
+  "token_encoding": "o200k_base",
+  "rpm_limit": 60,
+  "tpm_limit": 200000,
+  "request_concurrency": 2,
+  "token_count_buffer": 1.2
+}
+>
+
+要点：
+
+- **`--concurrency` 是另一回事。** 它控制**工作线程池**（Stage 2 同时跑多少批），而 `request_concurrency` 控制**真正离开进程的 HTTP 请求数**。两者可以同时设：例如 `--concurrency 8 --request-concurrency 2` 表示 8 个 worker 抢 2 个出口槽位。
+- **重试也计入。** 每次重试都过限流器，所以网络抖动也不会让你的 `rpm_limit` 被刺穿。
+- **429 仍然会重试。** 万一有 429 漏出来（比如同 key 还有别的进程），执行器会退避重试——`is_retry_error` 现在认识 `openai.RateLimitError`。
+- **`token_count_buffer` 是安全阀。** 设了 `tpm_limit` 后仍出现 `429`，就调大它（比如 `1.5`）——它会按倍数高估每次请求的成本再扣 TPM 窗口。
+
+---
+
 ## 命令参数一览
 
 随时用 `poetry run epub-commentor --help` 查看权威列表。除 `source` 外，下列参数均可选。
@@ -257,6 +303,9 @@ poetry run epub-commentor "book.epub" --synopsis "..." -i
 | `--cache-user-id ID` | 缓存命名空间。换个值可为新书/新用户强制重新生成。 |
 | `-i`, `--interactive` | 运行前从勾选列表挑选章节。 |
 | `-q`, `--quiet` | 关闭进度显示和结尾总结。 |
+| `--rpm-limit N` | 每 60 秒窗口最多发几个请求。详见[速率限制](#免费-llm-速率限制)。 |
+| `--tpm-limit N` | 每 60 秒窗口最多消耗多少估算 token。 |
+| `--request-concurrency N` | 同时在飞的 HTTP 请求上限。 |
 
 ---
 

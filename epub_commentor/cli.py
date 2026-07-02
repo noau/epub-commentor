@@ -92,6 +92,35 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Number of Stage 2 worker threads (default: 4).",
     )
     parser.add_argument(
+        "--rpm-limit",
+        type=int,
+        default=None,
+        help=(
+            "Max LLM requests per 60s sliding window. Default: no limit. "
+            "Use for free tiers that publish a hard per-key ceiling."
+        ),
+    )
+    parser.add_argument(
+        "--tpm-limit",
+        type=int,
+        default=None,
+        help=(
+            "Max estimated LLM tokens per 60s sliding window (default: no limit). "
+            "Estimated via tiktoken with a 1.2x safety buffer; tune via "
+            "'token_count_buffer' in format.json if you observe 429s."
+        ),
+    )
+    parser.add_argument(
+        "--request-concurrency",
+        type=int,
+        default=None,
+        help=(
+            "Max simultaneous in-flight LLM HTTP requests (default: no limit). "
+            "Match this to the provider's server-side hard cap, e.g. 2 for "
+            "GLM-4-flash-250414 free tier."
+        ),
+    )
+    parser.add_argument(
         "--max-json-retries",
         type=int,
         default=None,
@@ -689,6 +718,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         log_dir = Path("temp/logs")
     if log_dir is not None:
         llm_kwargs["log_dir_path"] = str(log_dir.resolve())
+    # Rate-limit knobs: CLI flags override format.json entries one-to-one.
+    if args.rpm_limit is not None:
+        llm_kwargs["rpm_limit"] = args.rpm_limit
+    if args.tpm_limit is not None:
+        llm_kwargs["tpm_limit"] = args.tpm_limit
+    if args.request_concurrency is not None:
+        llm_kwargs["request_concurrency"] = args.request_concurrency
 
     llm = _construct_llm(llm_kwargs, format_path)
 

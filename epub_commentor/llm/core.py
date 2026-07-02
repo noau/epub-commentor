@@ -12,6 +12,7 @@ from ._debug_logger import make_request_logger
 from .context import LLMContext
 from .executor import LLMExecutor
 from .increasable import Increasable
+from .rate_limiter import LLMRateLimiter
 from .statistics import Statistics
 from .types import Message
 
@@ -31,6 +32,18 @@ class LLM:
         cache_path: PathLike | str | None = None,
         log_dir_path: PathLike | str | None = None,
         extra_body: dict[str, object] | None = None,
+        # Rate-limit knobs (all default to unlimited). Useful for free
+        # LLM tiers like Zhipu / GLM that publish a per-key ceiling:
+        #   rpm_limit           — max requests per 60s window.
+        #   tpm_limit           — max estimated tokens per 60s window.
+        #   request_concurrency — max simultaneous in-flight HTTP calls.
+        #   token_count_buffer  — safety multiplier on top of tiktoken's
+        #                         estimate (GLM's BPE differs from
+        #                         o200k_base; 1.2x keeps us under cap).
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        request_concurrency: int | None = None,
+        token_count_buffer: float = 1.2,
         # `debug` is accepted (no-op) for backward compatibility with
         # `format.json` / `format.template.json` that declare this field.
         # Actual per-request debug logging is controlled by `log_dir_path`
@@ -48,6 +61,13 @@ class LLM:
         self._log_dir_path: Path | None = self._ensure_dir_path(log_dir_path)
         self._debug: bool = debug
         self._statistics = Statistics()
+        self._rate_limiter = LLMRateLimiter(
+            rpm_limit=rpm_limit,
+            tpm_limit=tpm_limit,
+            concurrency_limit=request_concurrency,
+            encoding=self._encoding,
+            token_count_buffer=token_count_buffer,
+        )
         self._executor = LLMExecutor(
             url=url,
             model=model,
@@ -57,11 +77,23 @@ class LLM:
             retry_interval_seconds=retry_interval_seconds,
             statistics=self._statistics,
             extra_body=extra_body,
+            rate_limiter=self._rate_limiter,
         )
 
     @property
     def encoding(self) -> Encoding:
         return self._encoding
+
+    @property
+    def rate_limiter(self) -> LLMRateLimiter:
+        """The shared :class:`LLMRateLimiter` gating outbound HTTP calls.
+
+        Exposed mainly for tests and operator diagnostics. The limiter
+        is constructed with all three limits ``None`` when the user did
+        not supply ``rpm_limit`` / ``tpm_limit`` / ``request_concurrency``
+        in ``format.json`` — in that case every ``acquire()`` is a no-op.
+        """
+        return self._rate_limiter
 
     @property
     def total_tokens(self) -> int:

@@ -9,5 +9,9 @@
   "temperature": 0.4,
   "top_p": 0.9,
   "cache_path": "./commentary_cache",
-  "log_dir_path": null
+  "log_dir_path": null,
+  "rpm_limit": null,
+  "tpm_limit": null,
+  "request_concurrency": null,
+  "token_count_buffer": 1.2
 }

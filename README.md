@@ -128,6 +128,10 @@ Then open `format.json` and fill it in. Here's a complete example with **every f
 | `top_p` | No | Alternative to temperature (nucleus sampling). | Leave as `0.9`, or set `null` to ignore. |
 | `cache_path` | No | Folder to store responses so re-runs are free. | See [Saving money with the cache](#saving-money-with-the-cache). Omit or `null` to disable. |
 | `log_dir_path` | No | Folder for detailed debug logs. | `null` = off. See [When something goes wrong](#when-something-goes-wrong). |
+| `rpm_limit` | No | Max LLM requests per 60-second sliding window. | `null` = no limit. See [Rate limiting for free LLM tiers](#rate-limiting-for-free-llm-tiers). |
+| `tpm_limit` | No | Max estimated LLM tokens per 60-second sliding window. | `null` = no limit. Token count is estimated via `token_encoding` with a safety buffer. |
+| `request_concurrency` | No | Max simultaneous in-flight LLM HTTP requests. | `null` = no limit. Set this to the provider's server-side hard cap (e.g. `2` for GLM-4-flash-250414 free tier). |
+| `token_count_buffer` | No | Safety multiplier on top of tiktoken's estimate (default `1.2`). | Raise this if you observe `429` even with `tpm_limit` set. |
 
 ### Provider examples
 
@@ -233,6 +237,48 @@ You control the notes through a handful of flags. All are optional.
 
 ---
 
+## Rate limiting for free LLM tiers
+
+When you point Commentor at a free LLM tier (e.g. Zhipu / GLM, or any provider with a hard per-key ceiling), the model will throw `429 Too Many Requests` if you out-pace it. Three rate-limit knobs live **inside the `LLM` class**, so every layer — CLI, scripts, Python callers — gets throttled for free:
+
+| Knob | Default | What it controls |
+|---|---|---|
+| `rpm_limit` | `null` (unlimited) | Max LLM requests per rolling 60-second window. |
+| `tpm_limit` | `null` (unlimited) | Max estimated tokens per rolling 60-second window. Tokens are counted via `tiktoken` + a `1.2x` safety buffer, so non-OpenAI tokenizers (GLM etc.) stay safely under the cap. |
+| `request_concurrency` | `null` (unlimited) | Max simultaneous in-flight HTTP calls. This is the *server-side* ceiling — e.g. `2` for `glm-4-flash-250414` on the free tier. |
+
+Set them on the CLI:
+
+```bash
+poetry run epub-commentor path/to/source.epub \
+  --synopsis "..." \
+  --rpm-limit 60 --tpm-limit 200000 --request-concurrency 2
+```
+
+…or persistently in `format.json`:
+
+```json
+{
+  "key": "...",
+  "url": "https://open.bigmodel.cn/api/paas/v4/",
+  "model": "glm-4-flash-250414",
+  "token_encoding": "o200k_base",
+  "rpm_limit": 60,
+  "tpm_limit": 200000,
+  "request_concurrency": 2,
+  "token_count_buffer": 1.2
+}
+```
+
+Notes:
+
+- **`--concurrency` is different.** It controls the *worker thread pool* (how many Stage 2 batches process in parallel). `request_concurrency` controls the *number of HTTP requests that actually leave the process*. Set both: e.g. `--concurrency 8 --request-concurrency 2` means 8 workers contend for 2 outbound slots.
+- **Retries count.** Every retry attempt passes through the rate limiter, so a flapping connection won't punch through your `rpm_limit`.
+- **429 is still retried.** If a 429 ever leaks through (e.g. another process sharing the same API key), the executor backs off and retries — `is_retry_error` now recognises `openai.RateLimitError`.
+- **`token_count_buffer` is your safety valve.** Raise it (e.g. `1.5`) if you still see `429` after setting `tpm_limit`; it over-estimates the per-request cost before charging the TPM window.
+
+---
+
 ## Command reference
 
 Run `poetry run epub-commentor --help` any time for the authoritative list. Every flag below is optional except `source`.
@@ -257,6 +303,9 @@ Run `poetry run epub-commentor --help` any time for the authoritative list. Ever
 | `--cache-user-id ID` | Namespace for the cache. Change it to force fresh results for a new book/user. |
 | `-i`, `--interactive` | Pick chapters from a checklist before running. |
 | `-q`, `--quiet` | Suppress the progress display and final summary. |
+| `--rpm-limit N` | Max LLM requests per 60s window. See [Rate limiting](#rate-limiting-for-free-llm-tiers). |
+| `--tpm-limit N` | Max estimated LLM tokens per 60s window. |
+| `--request-concurrency N` | Max simultaneous in-flight LLM HTTP calls. |
 
 ---
 

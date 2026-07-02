@@ -21,6 +21,11 @@ def _is_openai_retry_error(err: Exception) -> bool:
         return True
     if isinstance(err, openai.InternalServerError):
         return err.status_code in (502, 503, 504)
+    # HTTP 429 — the rate limiter is the primary defense, but if a 429
+    # still leaks through (e.g. another process sharing the same key)
+    # we back off and retry instead of failing the whole block.
+    if isinstance(err, openai.RateLimitError):
+        return True
     return False
 
 
