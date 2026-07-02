@@ -35,7 +35,6 @@ jobs:
           shiv \
             --python "$PY" \
             --python-version 313 \
-            --platform manylinux2014_x86_64 \
             --console-script epub-commentor \
             --output-file epub-commentor \
             .
