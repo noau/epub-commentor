@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from epub_translator.epub.toc import Toc, read_toc, write_toc
-from epub_translator.epub.zip import Zip
+from epub_commentor.epub.toc import Toc, read_toc, write_toc
+from epub_commentor.epub.zip import Zip
 from tests.utils import create_temp_dir_fixture
 
 # 创建 toc 专用的临时目录 fixture

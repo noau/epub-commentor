@@ -1,0 +1,35 @@
+{
+  "id": "case10_two_kinds",
+  "description": "Single block with both a kind=note and a kind=intro on different paragraphs. Verifies kind/class dispatch.",
+  "block_size": 4,
+  "chapter": {
+    "path": "ch10.xhtml",
+    "title": "Chapter 10",
+    "paragraphs": [
+      "It is a truth universally acknowledged.",
+      "That a single man in possession of a good fortune must be in want of a wife.",
+      "However little known the feelings or views of such a man may be on his first entering a neighbourhood.",
+      "This truth is so well fixed in the minds of the surrounding families."
+    ]
+  },
+  "memo": {
+    "core_thesis": "Pride and Prejudice's opening — a famous ironic thesis.",
+    "outline": ["thesis", "single man", "neighbourhood"],
+    "tone": "ironic",
+    "target_audience": "general readers",
+    "key_terms": [],
+    "reading_anchors": ["It is a truth universally acknowledged"]
+  },
+  "block_responses": [
+    {
+      "comments": [
+        {"target_p_ids": [0], "position": "before", "kind": "intro", "content": "The novel's opening sentence is one of the most parodied in English."},
+        {"target_p_ids": [1], "position": "after", "kind": "note", "content": "Note that the grammar is deliberately inverted — Austen treats the proposition as obvious."}
+      ]
+    }
+  ],
+  "expected_comments": [
+    {"target_p_ids": [0], "position": "before", "kind": "intro", "content": "The novel's opening sentence is one of the most parodied in English."},
+    {"target_p_ids": [1], "position": "after", "kind": "note", "content": "Note that the grammar is deliberately inverted — Austen treats the proposition as obvious."}
+  ]
+}

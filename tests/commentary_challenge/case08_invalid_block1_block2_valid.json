@@ -1,0 +1,30 @@
+{
+  "id": "case08_invalid_block1_block2_valid",
+  "description": "First block returns invalid JSON (out-of-range p_id), second returns valid. Verifies retry-then-continue behaviour: retry succeeds only when one of max_json_retries is valid, so block 1 must fail. Use case for negative test: process_chapters should raise on the first invalid block; second block never runs.",
+  "block_size": 3,
+  "chapter": {
+    "path": "ch08.xhtml",
+    "title": "Chapter 8",
+    "paragraphs": [
+      "First.", "Second.", "Third.",
+      "Fourth.", "Fifth.", "Sixth."
+    ]
+  },
+  "memo": {
+    "core_thesis": "Negative test — bad Stage 2 response must raise.",
+    "outline": ["a", "b", "c"],
+    "tone": "neutral",
+    "target_audience": "all",
+    "key_terms": [],
+    "reading_anchors": []
+  },
+  "block_responses": [
+    {
+      "comments": [
+        {"target_p_ids": [0, 1, 9], "position": "before", "kind": "note", "content": "9 is out of block range"}
+      ]
+    }
+  ],
+  "expected_error": "CommentInvalidJSONError",
+  "expected_comments": []
+}

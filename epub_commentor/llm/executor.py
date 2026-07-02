@@ -1,0 +1,245 @@
+from io import StringIO
+from logging import Logger
+from time import sleep
+
+from openai import OpenAI, omit
+from openai.types.chat import ChatCompletionMessageParam
+
+from ..errors import CommentAbortError
+from ._abort import is_abort_requested
+from .error import is_retry_error
+from .rate_limiter import LLMRateLimiter
+from .statistics import Statistics
+from .types import Message, MessageRole
+
+
+class LLMExecutor:
+    def __init__(
+        self,
+        api_key: str,
+        url: str,
+        model: str,
+        timeout: float | None,
+        retry_times: int,
+        retry_interval_seconds: float,
+        statistics: Statistics,
+        extra_body: dict[str, object] | None = None,
+        rate_limiter: LLMRateLimiter | None = None,
+        json_mode: bool = False,
+    ) -> None:
+        self._model_name: str = model
+        self._timeout: float | None = timeout
+        self._retry_times: int = retry_times
+        self._retry_interval_seconds: float = retry_interval_seconds
+        self._statistics = statistics
+        self._extra_body: dict[str, object] | None = extra_body
+        self._rate_limiter: LLMRateLimiter | None = rate_limiter
+        self._json_mode: bool = json_mode
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url=url,
+            timeout=timeout,
+        )
+
+    def request(
+        self,
+        messages: list[Message],
+        max_tokens: int | None,
+        temperature: float | None,
+        top_p: float | None,
+        cache_key: str | None,
+        logger: Logger | None = None,
+    ) -> str:
+        response: str = ""
+        last_error: Exception | None = None
+        did_success = False
+
+        if logger is not None:
+            parameters: list[str] = [
+                f"\t\ntemperature={temperature}",
+                f"\t\ntop_p={top_p}",
+                f"\t\nmax_tokens={max_tokens}",
+                f"\t\njson_mode={self._json_mode}",
+            ]
+            if cache_key is not None:
+                parameters.append(f"\t\ncache_key={cache_key}")
+
+            logger.debug(f"[[Parameters]]:{''.join(parameters)}\n")
+            logger.debug(f"[[Request]]:\n{self._input2str(messages)}\n")
+
+        try:
+            for i in range(self._retry_times + 1):
+                # Bail before even attempting the call if the user has
+                # asked to abort — saves the cost of a doomed network round-trip.
+                if is_abort_requested():
+                    raise CommentAbortError("aborted by user")
+
+                try:
+                    response = self._invoke_model(
+                        input_messages=messages,
+                        temperature=temperature,
+                        top_p=top_p,
+                        max_tokens=max_tokens,
+                    )
+                    if logger is not None:
+                        logger.debug(f"[[Response]]:\n{response}\n")
+
+                except CommentAbortError:
+                    # Propagate without marking this attempt as a connection error.
+                    raise
+
+                except Exception as err:
+                    last_error = err
+                    if not is_retry_error(err):
+                        raise err
+                    if logger is not None:
+                        logger.warning(f"request failed with connection error, retrying... ({i + 1} times)")
+                    if self._retry_interval_seconds > 0.0 and i < self._retry_times:
+                        # Sleep in short slices so Ctrl-C is observed within
+                        # ~100ms even if retry_interval_seconds is large.
+                        self._interruptible_sleep(self._retry_interval_seconds)
+                    continue
+
+                did_success = True
+                break
+
+        except KeyboardInterrupt as err:
+            if last_error is not None and logger is not None:
+                logger.debug(f"[[Error]]:\n{last_error}\n")
+            raise err
+
+        if not did_success:
+            if last_error is None:
+                raise RuntimeError("Request failed with unknown error")
+            else:
+                raise last_error
+
+        return response
+
+    @staticmethod
+    def _interruptible_sleep(total_seconds: float, slice_seconds: float = 0.1) -> None:
+        """Sleep ``total_seconds`` in small slices, aborting on Ctrl-C.
+
+        ``time.sleep`` blocks the GIL but a SIGINT is still delivered to
+        the main thread; however our handler does not raise — it sets a
+        flag — so the sleep otherwise runs to completion. Slicing lets
+        the abort flag fire after at most one slice.
+        """
+        elapsed = 0.0
+        while elapsed < total_seconds:
+            if is_abort_requested():
+                return
+            step = min(slice_seconds, total_seconds - elapsed)
+            sleep(step)
+            elapsed += step
+
+    def _input2str(self, input: str | list[Message]) -> str:
+        if isinstance(input, str):
+            return input
+        if not isinstance(input, list):
+            raise ValueError(f"Unsupported input type: {type(input)}")
+
+        buffer = StringIO()
+        is_first = True
+        for message in input:
+            if not is_first:
+                buffer.write("\n\n")
+            if message.role == MessageRole.SYSTEM:
+                buffer.write("System:\n")
+                buffer.write(message.message)
+            elif message.role == MessageRole.USER:
+                buffer.write("User:\n")
+                buffer.write(message.message)
+            elif message.role == MessageRole.ASSISTANT:
+                buffer.write("Assistant:\n")
+                buffer.write(message.message)
+            else:
+                buffer.write(str(message))
+            is_first = False
+
+        return buffer.getvalue()
+
+    def _invoke_model(
+        self,
+        input_messages: list[Message],
+        top_p: float | None,
+        temperature: float | None,
+        max_tokens: int | None,
+    ) -> str:
+        # Gate every HTTP attempt through the rate limiter so retries
+        # also count against RPM / TPM / concurrency. The semaphore is
+        # acquired *before* the budget wait so the slowest gate (network)
+        # holds the in-flight slot, not a worker that's just sleeping.
+        if self._rate_limiter is not None:
+            estimated = self._rate_limiter.estimate_tokens(input_messages)
+            self._rate_limiter.acquire(estimated)
+        try:
+            return self._do_invoke(input_messages, top_p, temperature, max_tokens)
+        finally:
+            if self._rate_limiter is not None:
+                self._rate_limiter.release()
+
+    def _do_invoke(
+        self,
+        input_messages: list[Message],
+        top_p: float | None,
+        temperature: float | None,
+        max_tokens: int | None,
+    ) -> str:
+        messages: list[ChatCompletionMessageParam] = []
+        for item in input_messages:
+            if item.role == MessageRole.SYSTEM:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": item.message,
+                    }
+                )
+            elif item.role == MessageRole.USER:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": item.message,
+                    }
+                )
+            elif item.role == MessageRole.ASSISTANT:
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": item.message,
+                    }
+                )
+
+        stream = self._client.chat.completions.create(
+            model=self._model_name,
+            messages=messages,
+            stream=True,
+            stream_options={"include_usage": True},
+            top_p=top_p if top_p is not None else omit,
+            temperature=temperature if temperature is not None else omit,
+            max_tokens=max_tokens if max_tokens is not None else omit,
+            response_format={"type": "json_object"} if self._json_mode else omit,
+            extra_body=self._extra_body,
+        )
+        buffer = StringIO()
+        try:
+            for chunk in stream:
+                # Poll the abort flag between chunks. Even though Python
+                # delivers SIGINT to the main thread (which is what runs
+                # this loop on the worker side via ThreadPoolExecutor),
+                # the handler only sets a flag, so we still need to check.
+                if is_abort_requested():
+                    raise CommentAbortError("aborted by user")
+                if chunk.choices and chunk.choices[0].delta.content:
+                    buffer.write(chunk.choices[0].delta.content)
+                self._statistics.submit_usage(chunk.usage)
+        except CommentAbortError:
+            # Close the underlying httpx response so the server sees
+            # the connection drop instead of waiting for the full
+            # response to drain into the kernel's receive buffer.
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001 - close is best-effort
+                pass
+            raise
+        return buffer.getvalue()

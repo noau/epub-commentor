@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from epub_translator.epub.spines import search_spine_paths
-from epub_translator.epub.zip import Zip
+from epub_commentor.epub.spines import search_spine_paths
+from epub_commentor.epub.zip import Zip
 from tests.utils import create_temp_dir_fixture
 
 # 创建 spines 专用的临时目录 fixture
@@ -102,7 +102,7 @@ class TestSpineCompletenessComparison:
 
     def test_spine_contains_all_toc_files(self, spines_temp_dir):
         """验证 spine 包含 TOC 中引用的所有文件（以及更多）"""
-        from epub_translator.epub.toc import read_toc
+        from epub_commentor.epub.toc import read_toc
 
         source_path = Path("tests/assets/The little prince.epub")
         temp_path = spines_temp_dir / "temp_comparison.epub"

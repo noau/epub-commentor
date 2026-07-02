@@ -1,0 +1,32 @@
+{
+  "id": "case06_long_block",
+  "description": "Block larger than 6 — tests the default block_size=6 split (3 blocks of 6,6,4).",
+  "block_size": 6,
+  "chapter": {
+    "path": "ch06.xhtml",
+    "title": "Chapter 6",
+    "paragraphs": [
+      "P0", "P1", "P2", "P3", "P4", "P5",
+      "P6", "P7", "P8", "P9", "P10", "P11",
+      "P12", "P13", "P14", "P15"
+    ]
+  },
+  "memo": {
+    "core_thesis": "Sixteen numbered paragraphs.",
+    "outline": ["first half", "middle", "last quarter"],
+    "tone": "neutral",
+    "target_audience": "all",
+    "key_terms": [],
+    "reading_anchors": []
+  },
+  "block_responses": [
+    {"comments": [{"target_p_ids": [0], "position": "before", "kind": "note", "content": "block 0 p0"}]},
+    {"comments": [{"target_p_ids": [3], "position": "after", "kind": "note", "content": "block 1 -> p9"}]},
+    {"comments": [{"target_p_ids": [3], "position": "after", "kind": "note", "content": "block 2 -> p15"}]}
+  ],
+  "expected_comments": [
+    {"target_p_ids": [0], "position": "before", "kind": "note", "content": "block 0 p0"},
+    {"target_p_ids": [9], "position": "after", "kind": "note", "content": "block 1 -> p9"},
+    {"target_p_ids": [15], "position": "after", "kind": "note", "content": "block 2 -> p15"}
+  ]
+}

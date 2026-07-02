@@ -1,0 +1,30 @@
+{
+  "id": "case09_retry_recovery",
+  "description": "Stage 2 returns invalid JSON on first two attempts, then valid on third. Verifies the retry loop recovers.",
+  "block_size": 3,
+  "chapter": {
+    "path": "ch09.xhtml",
+    "title": "Chapter 9",
+    "paragraphs": [
+      "P0 — first paragraph of chapter 9.",
+      "P1 — second paragraph of chapter 9.",
+      "P2 — third paragraph of chapter 9."
+    ]
+  },
+  "memo": {
+    "core_thesis": "Test of the multi-round retry mechanism.",
+    "outline": ["a", "b", "c"],
+    "tone": "neutral",
+    "target_audience": "all",
+    "key_terms": [],
+    "reading_anchors": []
+  },
+  "block_responses_retry": [
+    "this is not json",
+    "{\"comments\": {\"target_p_ids\": [0]}}",
+    {"comments": [{"target_p_ids": [0], "position": "before", "kind": "note", "content": "recovered"}]}
+  ],
+  "expected_comments": [
+    {"target_p_ids": [0], "position": "before", "kind": "note", "content": "recovered"}
+  ]
+}

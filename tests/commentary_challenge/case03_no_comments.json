@@ -1,0 +1,26 @@
+{
+  "id": "case03_no_comments",
+  "description": "Chapter with no comments — LLM returns empty list. Verifies empty annotation passes through.",
+  "block_size": 3,
+  "chapter": {
+    "path": "ch03.xhtml",
+    "title": "Chapter 3",
+    "paragraphs": [
+      "The cat sat on the mat.",
+      "The mat was on the floor.",
+      "The floor was clean."
+    ]
+  },
+  "memo": {
+    "core_thesis": "A trivial scene that needs no commentary.",
+    "outline": ["cat", "mat", "floor"],
+    "tone": "flat",
+    "target_audience": "everyone",
+    "key_terms": [],
+    "reading_anchors": []
+  },
+  "block_responses": [
+    {"comments": []}
+  ],
+  "expected_comments": []
+}

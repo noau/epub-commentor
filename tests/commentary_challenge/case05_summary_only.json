@@ -1,0 +1,34 @@
+{
+  "id": "case05_summary_only",
+  "description": "A summary comment on the last paragraph — verifies AFTER position lands on the last p.",
+  "block_size": 5,
+  "chapter": {
+    "path": "ch05.xhtml",
+    "title": "Chapter 5",
+    "paragraphs": [
+      "First.",
+      "Second.",
+      "Third.",
+      "Fourth.",
+      "The end."
+    ]
+  },
+  "memo": {
+    "core_thesis": "A flat list that resolves with a single closing beat.",
+    "outline": ["intro", "body", "end"],
+    "tone": "minimalist",
+    "target_audience": "everyone",
+    "key_terms": [],
+    "reading_anchors": ["The end."]
+  },
+  "block_responses": [
+    {
+      "comments": [
+        {"target_p_ids": [4], "position": "after", "kind": "summary", "content": "The chapter closes on a single sentence that doubles as a meta-commentary on the list form."}
+      ]
+    }
+  ],
+  "expected_comments": [
+    {"target_p_ids": [4], "position": "after", "kind": "summary", "content": "The chapter closes on a single sentence that doubles as a meta-commentary on the list form."}
+  ]
+}

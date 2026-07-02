@@ -1,6 +1,6 @@
 import unittest
 
-from epub_translator.xml.self_closing import self_close_void_elements, unclose_void_elements
+from epub_commentor.xml.self_closing import self_close_void_elements, unclose_void_elements
 
 
 class TestSelfCloseVoidElements(unittest.TestCase):

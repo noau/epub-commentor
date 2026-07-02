@@ -1,0 +1,71 @@
+/* commentary.css — EPUB marginalia (e-ink friendly)
+ *
+ * Designed for 6-inch e-ink screens (Kindle, Kobo, Boox):
+ *   - pure grayscale; no background color (avoids night-mode invert)
+ *   - one left rule only — no boxed panels, no three-sided borders
+ *   - border + line-height to provide visual separation, no box-shadow
+ *   - page-break-inside: avoid keeps the aside glued to its anchor paragraph
+ *   - overflow-wrap survives long URLs in NOTE entries
+ *   - reset <p> margin/indent so asides don't inherit body typography
+ *
+ * All three kinds share the same 5px left-rule width so the rule lines align
+ * vertically across a page (mixing 2/3/5px previously caused the rules to
+ * land at different x-offsets, which read as "broken" on e-ink). The visual
+ * hierarchy is now carried by line style alone:
+ *   intro   = dashed  (lightest marker)
+ *   note    = double  (mid-weight pencil mark)
+ *   summary = solid   (heaviest recap)
+ * Companion-reader aesthetic — each note stands upright on its own
+ * (Part IX #6: italic was removed because e-ink diagonals read harder
+ * than upright across long passages).
+ */
+
+.commentary {
+  margin: 0.5em 0.5em 0.5em 1.8em;
+  padding: 0.2em 0.5em 0.2em 0.7em;
+  border-left: 3px solid #555;
+  font-size: 0.9em;
+  line-height: 1.45;
+  font-style: normal;
+  break-inside: avoid;
+  page-break-inside: avoid;
+  overflow-wrap: break-word;
+}
+
+.commentary p {
+  margin: 0 0 0.4em 0;
+  padding: 0;
+  text-indent: 0;
+}
+
+.commentary p:last-child {
+  margin-bottom: 0;
+}
+
+/* INTRO — prelude to a section, dashed left rule (lightest marker). */
+.commentary-intro {
+  border-left: 5px dashed #000;
+}
+
+/* SUMMARY — recap of a section, solid left rule (heaviest recap). */
+.commentary-summary {
+  border-left: 5px solid #000;
+}
+
+/* NOTE — pencil mark in the margin, double-line rule (mid-weight) +
+ * deeper indent. No italic (Part IX #6 — e-ink readers handle upright
+ * text better than slanted text across sustained reading).
+ */
+.commentary-note {
+  border-left: 5px double #333;
+}
+
+/* Reserved for future transitions; the rule of thumb recorded here is
+ * "prefer whitespace over decoration" — long asides with motion become
+ * tiring on e-ink. Empty block by design.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .commentary {
+    /* No transitions today; placeholder for future static-only additions. */
+  }
+}

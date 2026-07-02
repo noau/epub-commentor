@@ -1,0 +1,35 @@
+{
+  "id": "case11_cross_kind_overlap",
+  "description": "intro [0,1] and note [1] in the same block share p_id 1. The validator must accept this cross-kind overlap (the canonical 古书夹注 pattern) and both comments survive Stage 2.",
+  "block_size": 4,
+  "chapter": {
+    "path": "ch11.xhtml",
+    "title": "Chapter 11",
+    "paragraphs": [
+      "It was the best of times, it was the worst of times.",
+      "It was the age of wisdom, it was the age of foolishness.",
+      "It was the epoch of belief, it was the epoch of incredulity.",
+      "It was the season of Light, it was the season of Darkness."
+    ]
+  },
+  "memo": {
+    "core_thesis": "A Tale of Two Cities opens with the famous doubled antitheses.",
+    "outline": ["thesis", "age", "epoch"],
+    "tone": "oratorical",
+    "target_audience": "general readers",
+    "key_terms": [],
+    "reading_anchors": ["best of times"]
+  },
+  "block_responses": [
+    {
+      "comments": [
+        {"target_p_ids": [0, 1], "position": "before", "kind": "intro", "content": "The doubling is the whole engine of the opening — every clause cancels its twin before the next can land."},
+        {"target_p_ids": [1], "position": "after", "kind": "note", "content": "'Wisdom' and 'foolishness' are not opposites here — they are the same pressure applied in opposite directions, and that collapse is the point."}
+      ]
+    }
+  ],
+  "expected_comments": [
+    {"target_p_ids": [0, 1], "position": "before", "kind": "intro", "content": "The doubling is the whole engine of the opening — every clause cancels its twin before the next can land."},
+    {"target_p_ids": [1], "position": "after", "kind": "note", "content": "'Wisdom' and 'foolishness' are not opposites here — they are the same pressure applied in opposite directions, and that collapse is the point."}
+  ]
+}

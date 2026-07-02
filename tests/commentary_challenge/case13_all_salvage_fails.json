@@ -1,0 +1,32 @@
+{
+  "id": "case13_all_salvage_fails",
+  "description": "Stage 2 returns 3 comments, all with out-of-range target_p_ids (block_size=3 but p_ids are 10/11/12). Strict validator rejects every comment, retries fail to repair, salvage drops every comment as unrecoverable, and the block raises CommentInvalidJSONError.",
+  "block_size": 3,
+  "chapter": {
+    "path": "ch13.xhtml",
+    "title": "Chapter 13",
+    "paragraphs": [
+      "P0 — first paragraph.",
+      "P1 — second paragraph.",
+      "P2 — third paragraph."
+    ]
+  },
+  "memo": {
+    "core_thesis": "Test of the all-broken salvage fallback path.",
+    "outline": ["a", "b", "c"],
+    "tone": "neutral",
+    "target_audience": "all",
+    "key_terms": [],
+    "reading_anchors": []
+  },
+  "block_responses_retry": [
+    {
+      "comments": [
+        {"target_p_ids": [10], "position": "before", "kind": "intro", "content": "out of range"},
+        {"target_p_ids": [11], "position": "after", "kind": "note", "content": "out of range"},
+        {"target_p_ids": [12], "position": "after", "kind": "summary", "content": "out of range"}
+      ]
+    }
+  ],
+  "expected_error": "CommentInvalidJSONError"
+}

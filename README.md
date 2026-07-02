@@ -1,497 +1,545 @@
 <div align=center>
-  <h1>EPUB Translator</h1>
+  <h1>EPUB Commentor</h1>
   <p>
-    <a href="https://github.com/oomol-lab/epub-translator/actions/workflows/merge-build.yml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/oomol-lab/epub-translator/merge-build.yml" alt="ci" /></a>
-    <a href="https://pypi.org/project/epub-translator/" target="_blank"><img src="https://img.shields.io/badge/pip_install-epub--translator-blue" alt="pip install epub-translator" /></a>
-    <a href="https://pypi.org/project/epub-translator/" target="_blank"><img src="https://img.shields.io/pypi/v/epub-translator.svg" alt="pypi epub-translator" /></a>
-    <a href="https://pypi.org/project/epub-translator/" target="_blank"><img src="https://img.shields.io/pypi/pyversions/epub-translator.svg" alt="python versions" /></a>
-    <a href="https://github.com/oomol-lab/epub-translator/blob/main/LICENSE" target="_blank"><img src="https://img.shields.io/github/license/oomol-lab/epub-translator" alt="license" /></a>
+    <a href="https://github.com/noau/epub-commentor/actions/workflows/merge-build.yml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/noau/epub-commentor/merge-build.yml" alt="ci" /></a>
+    <a href="https://github.com/noau/epub-commentor/blob/main/LICENSE" target="_blank"><img src="https://img.shields.io/github/license/noau/epub-commentor" alt="license" /></a>
   </p>
-  <p><a href="https://hub.oomol.com/package/books-translator?open=true" target="_blank"><img src="https://static.oomol.com/assets/button.svg" alt="Open in OOMOL Studio" /></a></p>
   <p>English | <a href="./README_zh-CN.md">中文</a></p>
 </div>
 
+> This project contains LLM generated content such as code or documentation.
 
-Want to read a book in a foreign language without losing the original context? EPUB Translator transforms any EPUB into a bilingual edition with AI-powered translations displayed side-by-side with the original text.
+**EPUB Commentor** reads an EPUB and hands you back the *same book* — every word of the original untouched — with AI-written reading companions added alongside the text: a short **introduction** before a passage, a **summary** after it, and occasional **margin notes** on tricky terms. The commentary is rendered as quiet, styled side-blocks that Kindle, Kobo, and other e-ink readers display natively. Import the result and read.
 
-Whether you're learning a new language, conducting academic research, or simply enjoying foreign literature, you get both versions in one book - preserving all formatting, images, and structure.
+**What it looks like** — your original text is untouched; the model only adds the bordered blocks around it:
 
-![Translation Effect](./docs/images/translation.png)
+<p align="center">
+  <img src="./docs/imgs/example.png" alt="Example"
+       style="max-width: 560px; width: 100%; height: auto;" />
+</p>
 
-### Online Version
+<p align="center"><sub>Example generated from 老舍《茶馆》.</sub></p>
 
-If you'd like to try EPUB Translator without setting it up locally, you can use [Inkora - EPUB Translator](https://inkora.oomol.com/epub-translator), the official online app for the same bilingual EPUB translation workflow. It lets you upload an EPUB file and try the main experience directly in your browser.
+## What you get
 
-[![EPUB Translator Online Version](docs/images/online-en.png)](https://inkora.oomol.com/epub-translator)
+- **Your original book, intact.** No paragraph is rewritten, translated, or reordered. Commentor only *adds* content next to the text.
+- **Three kinds of companion notes**, all authored by the model:
+  - **Intro** — a 1–3 sentence lead-in placed *before* a passage, so you know what's coming.
+  - **Summary** — a 1–3 sentence wrap-up placed *after* a passage, tying it together.
+  - **Note** — a brief gloss on a specific term or idea.
+- **Commentary in any language you choose** — read an English book with Chinese notes, or vice-versa.
+- **E-ink friendly styling** — greyscale, no color or shadow, and notes never split across a page break.
+- **A ready-to-read `.epub`** written next to your source file. Nothing to convert afterward — drag it onto your reader.
+
+---
+
+## Table of contents
+
+- [What you get](#what-you-get)
+- [Table of contents](#table-of-contents)
+- [Installation](#installation)
+- [Get an API key ready](#get-an-api-key-ready)
+- [Configure `format.json`](#configure-formatjson)
+  - [Provider examples](#provider-examples)
+  - [Also valid in `format.json`: pipeline options](#also-valid-in-formatjson-pipeline-options)
+- [Run it](#run-it)
+  - [A realistic first run](#a-realistic-first-run)
+- [Choosing chapters interactively](#choosing-chapters-interactively)
+- [Tuning the commentary](#tuning-the-commentary)
+- [Forcing JSON output](#forcing-json-output)
+- [Command reference](#command-reference)
+- [Reading the result on your device](#reading-the-result-on-your-device)
+- [Saving money with the cache](#saving-money-with-the-cache)
+- [When something goes wrong](#when-something-goes-wrong)
+  - [Common issues](#common-issues)
+- [Using it from Python](#using-it-from-python)
+  - [Watching progress](#watching-progress)
+  - [Picking chapters programmatically](#picking-chapters-programmatically)
+  - [`CommentConfig` options](#commentconfig-options)
+- [FAQ](#faq)
+- [License](#license)
+- [Support](#support)
+
+---
 
 ## Installation
 
+You need **Python 3.13+** and [Poetry](https://python-poetry.org/) (Python's dependency manager).
+
 ```bash
-pip install epub-translator
+git clone https://github.com/noau/epub-commentor.git
+cd epub-commentor
+poetry install
 ```
 
-**Requirements**: Python 3.11, 3.12, or 3.13
+That's it — `poetry install` pulls every dependency into an isolated environment. From here on, prefix commands with `poetry run` so they use that environment.
 
-## Quick Start
+> **Don't have Poetry?** Install it once with `pipx install poetry` (or follow the [official guide](https://python-poetry.org/docs/#installation)).
 
-### Using OOMOL Studio (Recommended)
+---
 
-The easiest way to use EPUB Translator is through OOMOL Studio with a visual interface:
+## Get an API key ready
 
-[![Watch the Tutorial](./docs/images/link2youtube.png)](https://www.youtube.com/watch?v=QsAdiskxfXI)
+Commentor talks to any **OpenAI-compatible** chat API — that includes OpenAI itself, Azure OpenAI, and most self-hosted or third-party gateways (DeepSeek, Together, Groq, local Ollama with an OpenAI shim, etc.). You need three things from your provider:
 
-### Using Python API
+1. An **API key** (a secret string, usually starting `sk-...`).
+2. The **base URL** of the API (the part ending in `/v1`).
+3. The **model name** you want to use.
+
+Keep these handy for the next step.
+
+---
+
+## Configure `format.json`
+
+Commentor reads your credentials from a file called `format.json`. Create it once by copying the template:
+
+```bash
+cp format.template.json format.json
+```
+
+Then open `format.json` and fill it in. Here's a complete example with **every field explained** — you only *need* to change `key`, `url`, `model`, and `token_encoding`:
+
+```json
+{
+  "key": "sk-your-secret-api-key",
+  "url": "https://api.openai.com/v1",
+  "model": "gpt-4o",
+  "token_encoding": "o200k_base",
+  "timeout": 360.0,
+  "retry_times": 5,
+  "retry_interval_seconds": 6.0,
+  "temperature": 0.4,
+  "top_p": 0.9,
+  "json_mode": false,
+  "cache_path": "./commentary_cache",
+  "log_dir_path": null
+}
+```
+
+| Field | Required? | What to put | Notes |
+|---|---|---|---|
+| `key` | Optional* | Your API key. | *See [Where does the API key come from?](#where-does-the-api-key-come-from) below. Keep this secret — don't commit `format.json` to a public repo. |
+| `url` | **Yes** | The API base URL, ending in `/v1`. | See the provider table below. |
+| `model` | **Yes** | The model name. | e.g. `gpt-4o`, `deepseek-chat`, or your Azure deployment name. |
+| `token_encoding` | **Yes** | The tokenizer name your model uses. | Used only to count tokens for the progress display. Use `o200k_base` for GPT-4o / GPT-4.1 / o-series, `cl100k_base` for older GPT-4 / GPT-3.5. When unsure, `o200k_base` is a safe default. |
+| `timeout` | No | Seconds to wait for one response before giving up. | `360.0` is generous for long chapters. Set `null` for no limit. |
+| `retry_times` | No | How many times to retry a failed network call. | Default `5`. |
+| `retry_interval_seconds` | No | Seconds to wait between retries. | Default `6.0`. |
+| `temperature` | No | Creativity of the writing, `0.0`–`1.0`. | `0.4` keeps notes expressive but on-topic. Higher = more varied, lower = more literal. |
+| `top_p` | No | Alternative to temperature (nucleus sampling). | Leave as `0.9`, or set `null` to ignore. |
+| `json_mode` | No | Force every chat-completion call to request `response_format={"type": "json_object"}`. | `false` (default) = unconstrained. `true` = force valid-JSON output. See [Forcing JSON output](#forcing-json-output). |
+| `cache_path` | No | Folder to store responses so re-runs are free. | See [Saving money with the cache](#saving-money-with-the-cache). Omit or `null` to disable. |
+| `log_dir_path` | No | Folder for detailed debug logs. | `null` = off. See [When something goes wrong](#when-something-goes-wrong). |
+| `rpm_limit` | No | Max LLM requests per 60-second sliding window. | `null` = no limit. See [Rate limiting for free LLM tiers](#rate-limiting-for-free-llm-tiers). |
+| `tpm_limit` | No | Max estimated LLM tokens per 60-second sliding window. | `null` = no limit. Token count is estimated via `token_encoding` with a safety buffer. |
+| `request_concurrency` | No | Max simultaneous in-flight LLM HTTP requests. | `null` = no limit. Set this to the provider's server-side hard cap (e.g. `2` for GLM-4-flash-250414 free tier). |
+| `token_count_buffer` | No | Safety multiplier on top of tiktoken's estimate (default `1.2`). | Raise this if you observe `429` even with `tpm_limit` set. |
+
+### Provider examples
+
+| Provider | `url` | `model` (example) | `token_encoding` |
+|---|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o` | `o200k_base` |
+| Azure OpenAI | `https://<resource>.openai.azure.com/openai/deployments/<deployment>` | *your deployment name* | match your model |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` | `cl100k_base` |
+| Any OpenAI-compatible service | `https://your-service.com/v1` | *provider-specific* | match your model's tokenizer |
+
+> **You can keep `format.json` next to your books.** Commentor looks for it in three places, in order: the path you pass with `--format-json`, then next to the source EPUB, then in the current folder.
+
+### Where does the API key come from?
+
+The loader checks two places, in this order:
+
+1. **`$EPUB_COMMENTOR_API_KEY`** environment variable. If set, it **wins** and `format.json`'s `key` field is ignored entirely.
+2. **`format.json`**'s `key` field. Empty / missing / `<PLACEHOLDER>` values are treated as missing.
+
+Prefer the env var for safety. Twelve-factor style keeps secrets out of checked-in files — set the env var in your shell profile, in CI's secret store, or via `direnv`, and **omit the `"key"` line from `format.json` entirely**:
+
+```bash
+export EPUB_COMMENTOR_API_KEY="sk-your-secret-api-key"
+```
+
+A safe-to-commit `format.json` (no secret anywhere):
+
+```json
+{
+  "url": "https://api.openai.com/v1",
+  "model": "gpt-4o",
+  "token_encoding": "o200k_base"
+}
+```
+
+Both places may be set at the same time (env var wins); this lets you check `format.json` into a public repo with **no `key` field at all** while keeping your actual key in a shell env that's never committed.
+
+If you forget to `export` the env var AND `format.json` has no `key` field, Commentor exits with a clear message:
+
+```
+failed to construct LLM from format.json: missing API key.
+Set the $EPUB_COMMENTOR_API_KEY environment variable (recommended for safety)
+or fill the "key" field in format.json.
+```
+
+### Also valid in `format.json`: pipeline options
+
+`format.json` isn't only for credentials. You can drop any **pipeline option** into the same flat file to make it a persistent default — handy when you don't want to retype the same flag on every run:
+
+```json
+{
+  "url": "https://api.openai.com/v1",
+  "model": "gpt-4o",
+  "token_encoding": "o200k_base",
+
+  "concurrency": 8,
+  "block_size": 8,
+  "target_language": "English",
+  "book_synopsis": "A philosophical fairy tale about a stranded pilot."
+}
+```
+
+Any field from the [`CommentConfig` table](#commentconfig-options) works here — `concurrency`, `block_size`, `target_language`, `book_synopsis`, `position`, `kinds`, `max_json_retries`, and so on. Two rules:
+
+- **Use the config field names, and command-line flags win.** A value in `format.json` is only a *default*; passing the matching flag (e.g. `--concurrency 4`) overrides it for that run. Note the file uses the config field name (`book_synopsis`, `cache_seed_user_id`), not the flag spelling (`--synopsis`, `--cache-user-id`).
+- **Unknown keys are ignored** with a warning on stderr — a typo won't crash the run.
+
+---
+
+## Run it
+
+The basic command takes one EPUB and (optionally) a one-line synopsis to set the tone:
+
+```bash
+poetry run epub-commentor "path/to/book.epub" --synopsis "A philosophical fairy tale about a stranded pilot."
+```
+
+When it finishes you'll see a summary panel, and a new file named **`book.commented.epub`** appears next to your original. That's the file to read.
+
+Want it somewhere specific? Use `-o`:
+
+```bash
+poetry run epub-commentor "book.epub" -o "~/Kindle/book-annotated.epub" --synopsis "..."
+```
+
+The **`--synopsis`** flag is optional but recommended — a single sentence about the book helps the model pitch its notes at the right level. If you skip it, Commentor still works using the book's own metadata.
+
+### A realistic first run
+
+```bash
+poetry run epub-commentor "The little prince.epub" \
+    --synopsis "A poetic tale about a pilot who meets a small prince from another planet." \
+    --target-language "English"
+```
+
+While it runs you'll see a live progress display: the top line tracks chapters (`Ch. 3/28: ...`), the bottom line tracks the smaller batches within the current chapter. Long books take a while and cost real API tokens — the final summary shows exactly how many tokens were used.
+
+---
+
+## Choosing chapters interactively
+
+Most EPUBs contain more than chapters: cover pages, tables of contents, copyright notices. To pick exactly what gets annotated, add **`-i`** (interactive):
+
+```bash
+poetry run epub-commentor "book.epub" --synopsis "..." -i
+```
+
+A checklist of every chapter appears. Controls:
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Move up / down |
+| `Space` or `Enter` | Toggle the highlighted chapter |
+| `A` | Select all |
+| `I` | Invert selection |
+| `C` | Clear all |
+| move to `[ Confirm ]` + `Enter` | Start annotating the selected chapters |
+| `Esc` / `Q` | Cancel and exit |
+
+Chapters with no real text (covers, navigation, image-only pages) are **pre-unchecked** for you — so you can often just press `Enter` on `[ Confirm ]` to skip all the junk at once. Everything you leave unchecked is copied into the output untouched.
+
+> `-i` needs a real terminal. If you pipe input or run it in a script, it exits with an error instead of guessing.
+
+---
+
+## Tuning the commentary
+
+You control the notes through a handful of flags. All are optional.
+
+- **`--target-language "Chinese"`** — the language the notes are written in. The book itself is never translated; only the added commentary uses this language. Default: Chinese.
+- **`--synopsis "..."`** — a one-line description of the book to steer the tone.
+- **`--block-size 6`** — how many paragraphs the model looks at per batch. Smaller = more granular, finer notes but more API calls (higher cost); larger = broader notes, cheaper. Default: `6`.
+- **`--concurrency 4`** — how many batches within a chapter are processed at once. Higher finishes faster but hits your API's rate limits harder. Default: `4`.
+- **`--no-css`** — inject only the note blocks, without the built-in styling (advanced; use if you'll supply your own stylesheet).
+
+---
+
+## Rate limiting for free LLM tiers
+
+When you point Commentor at a free LLM tier (e.g. Zhipu / GLM, or any provider with a hard per-key ceiling), the model will throw `429 Too Many Requests` if you out-pace it. Three rate-limit knobs live **inside the `LLM` class**, so every layer — CLI, scripts, Python callers — gets throttled for free:
+
+| Knob | Default | What it controls |
+|---|---|---|
+| `rpm_limit` | `null` (unlimited) | Max LLM requests per rolling 60-second window. |
+| `tpm_limit` | `null` (unlimited) | Max estimated tokens per rolling 60-second window. Tokens are counted via `tiktoken` + a `1.2x` safety buffer, so non-OpenAI tokenizers (GLM etc.) stay safely under the cap. |
+| `request_concurrency` | `null` (unlimited) | Max simultaneous in-flight HTTP calls. This is the *server-side* ceiling — e.g. `2` for `glm-4-flash-250414` on the free tier. |
+
+Set them on the CLI:
+
+```bash
+poetry run epub-commentor path/to/source.epub \
+  --synopsis "..." \
+  --rpm-limit 60 --tpm-limit 200000 --request-concurrency 2
+```
+
+…or persistently in `format.json`:
+
+```json
+{
+  "key": "...",
+  "url": "https://open.bigmodel.cn/api/paas/v4/",
+  "model": "glm-4-flash-250414",
+  "token_encoding": "o200k_base",
+  "rpm_limit": 60,
+  "tpm_limit": 200000,
+  "request_concurrency": 2,
+  "token_count_buffer": 1.2
+}
+```
+
+Notes:
+
+- **`--concurrency` is different.** It controls the *worker thread pool* (how many Stage 2 batches process in parallel). `request_concurrency` controls the *number of HTTP requests that actually leave the process*. Set both: e.g. `--concurrency 8 --request-concurrency 2` means 8 workers contend for 2 outbound slots.
+- **Retries count.** Every retry attempt passes through the rate limiter, so a flapping connection won't punch through your `rpm_limit`.
+- **429 is still retried.** If a 429 ever leaks through (e.g. another process sharing the same API key), the executor backs off and retries — `is_retry_error` now recognises `openai.RateLimitError`.
+- **`token_count_buffer` is your safety valve.** Raise it (e.g. `1.5`) if you still see `429` after setting `tpm_limit`; it over-estimates the per-request cost before charging the TPM window.
+
+---
+
+## Forcing JSON output
+
+Every LLM call Commentor makes (the chapter overview and each block's annotation) expects a **valid JSON object** back from the model. The prompts ask for it in text, and pydantic + a multi-turn retry loop clean up whatever slips through — but you can short-circuit that whole detour by turning on the API-level JSON mode.
+
+OpenAI, DeepSeek, and most other OpenAI-compatible providers honour a parameter that tells the model to only emit a JSON object: `response_format={"type": "json_object"}`. Commentor wraps that into a single boolean:
+
+```json
+{
+  "key": "sk-your-secret-api-key",
+  "url": "https://api.deepseek.com/v1",
+  "model": "deepseek-chat",
+  "token_encoding": "cl100k_base",
+  "json_mode": true
+}
+```
+
+Notes:
+
+- **Default is `false`** — when `json_mode` is `false` (or absent), Commentor never sends `response_format` to the SDK and your existing behaviour is preserved.
+- **One knob, every call.** Both the chapter-overview call and the per-block annotation call pick it up; there's nothing to wire per stage.
+- **Provider support is not universal.** A provider that rejects an unknown field will surface the error through the normal retry loop. Keep it `false` on providers that don't recognise it.
+- **Streaming still works.** Commentor reads the response in chunks regardless of JSON mode, so nothing changes about the live progress display.
+- **Debug-friendly.** When `log_dir_path` is set, the `[[Parameters]]` section of every request log now records the active `json_mode` value alongside `temperature`, `top_p`, etc.
+
+---
+
+## Command reference
+
+Run `poetry run epub-commentor --help` any time for the authoritative list. Every flag below is optional except `source`.
+
+| Flag | Meaning |
+|---|---|
+| `source` | Path to the EPUB to annotate. **Required.** Read-only — your original is never modified. |
+| `-o`, `--output PATH` | Where to write the result. Default: `<name>.commented.epub` next to the source. |
+| `--format-json PATH` | Where to read credentials from. Default: `format.json` next to the source, then the current folder. |
+| `--synopsis TEXT` | One-line book description to steer tone. |
+| `--target-language LANG` | Language for the commentary. Default: `Chinese`. |
+| `--block-size N` | Paragraphs per batch. Default: `6`. |
+| `--concurrency N` | Batches processed at once within a chapter. Default: `4`. |
+| `--max-json-retries N` | Retries when the model returns malformed notes for a batch. Default: `3`. |
+| `--max-scan-retries N` | Retries when the model's chapter overview comes back malformed. Default: `3`. |
+| `--cache-path DIR` | Folder to cache responses (makes re-runs free). |
+| `--css-path PATH` | Where the stylesheet lives inside the EPUB. Default: `Styles/commentary.css`. |
+| `--no-css` | Skip adding the stylesheet. |
+| `--fail-on-empty-chapter` | Stop with an error on a chapter that has no paragraphs, instead of skipping it. |
+| `--log-dir DIR` | Write detailed debug logs to this folder. |
+| `--debug` | Turn on debug logging (defaults the log folder to `./temp/logs/`). |
+| `--cache-user-id ID` | Namespace for the cache. Change it to force fresh results for a new book/user. |
+| `-i`, `--interactive` | Pick chapters from a checklist before running. |
+| `-q`, `--quiet` | Suppress the progress display and final summary. |
+| `--rpm-limit N` | Max LLM requests per 60s window. See [Rate limiting](#rate-limiting-for-free-llm-tiers). |
+| `--tpm-limit N` | Max estimated LLM tokens per 60s window. |
+| `--request-concurrency N` | Max simultaneous in-flight LLM HTTP calls. |
+
+---
+
+## Reading the result on your device
+
+The output is a standard `.epub`. To read it:
+
+- **Kindle** — Email the file to your [Send to Kindle](https://www.amazon.com/sendtokindle) address, or drag it into the Send to Kindle desktop app. (Modern Kindles accept EPUB directly.)
+- **Kobo / PocketBook / other e-ink** — Copy the `.epub` onto the device over USB, or add it through the device's library app.
+- **Calibre** — Just add the file to your library; the commentary styling comes along.
+- **Apple Books / Google Play Books** — Import the file directly.
+
+The notes appear as bordered side-blocks in the flow of the text, styled to stay readable on greyscale screens.
+
+---
+
+## Saving money with the cache
+
+LLM calls cost money, and a long book is many calls. If you set a **cache folder**, Commentor remembers every response — so if you re-run the same book (say, after tweaking one chapter, or after a crash), the parts it already did come back instantly and for free.
+
+```bash
+poetry run epub-commentor "book.epub" --synopsis "..." --cache-path ./commentary_cache
+```
+
+Or set `"cache_path": "./commentary_cache"` in `format.json` so it's always on.
+
+The cache is keyed by the book content and your settings, so changing the synopsis, language, or model correctly produces fresh notes. To deliberately start over for the same book, delete the cache folder or pass a new `--cache-user-id`.
+
+---
+
+## When something goes wrong
+
+If a run fails or the notes look off, turn on **debug logging** to see exactly what the model was asked and what it replied:
+
+```bash
+poetry run epub-commentor "book.epub" --synopsis "..." --debug
+# logs land in ./temp/logs/ — one file per request
+```
+
+Each log file records the full request, the raw response, and — if a batch had to be retried — the error and the model's exact malformed output. This is the first thing to check when a specific chapter produces strange or missing notes.
+
+### Common issues
+
+| Symptom | Likely cause / fix |
+|---|---|
+| `format.json not found` | You didn't copy the template. Run `cp format.template.json format.json` and fill it in (or set `$EPUB_COMMENTOR_API_KEY` to provide the API key without a config file — recommended for safety). |
+| `format.json is not valid JSON` | A typo — usually a trailing comma or missing quote. Validate it in any JSON linter. |
+| Authentication / 401 errors | Wrong `key` (in `$EPUB_COMMENTOR_API_KEY` env var or in `format.json`'s `key` field) or wrong `url`. Double-check both with your provider. |
+| Timeouts on long chapters | Raise `timeout` in `format.json` (e.g. `600.0`), or lower `--block-size`. |
+| Rate-limit errors | Lower `--concurrency` (try `2` or `1`). |
+| A chapter got no notes | It may have no real paragraphs (a cover or nav page) — that's normal and it's skipped. Use `-i` to see what's what. |
+| `--interactive requires a TTY` | You ran `-i` in a pipe or script. Drop `-i`, or run it in a normal terminal. |
+
+---
+
+## Using it from Python
+
+Prefer to script it? The same functionality is a single function call.
 
 ```python
-from epub_translator import LLM, translate, language, SubmitKind
+from epub_commentor import LLM, comment_epub, CommentConfig
 
-# Initialize LLM with your API credentials
 llm = LLM(
-    key="your-api-key",
+    key="sk-your-api-key",
     url="https://api.openai.com/v1",
-    model="gpt-4",
+    model="gpt-4o",
     token_encoding="o200k_base",
 )
 
-# Translate EPUB file using language constants
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language=language.ENGLISH,
-    submit=SubmitKind.APPEND_BLOCK,
+config = CommentConfig(
+    book_synopsis="A philosophical fairy tale about a stranded pilot.",
+    target_language="English",   # commentary language; the book is never translated
+    block_size=6,                # paragraphs per batch
+    concurrency=4,               # batches processed at once within a chapter
+)
+
+result = comment_epub(
+    source="book.epub",
+    output="book-annotated.epub",  # optional; defaults to <name>.commented.epub
     llm=llm,
+    config=config,
 )
+
+print(f"chapters annotated: {result.chapters_processed}")
+print(f"comments generated: {result.total_comments}")
+print(f"tokens used:        {result.total_tokens}")
 ```
 
-### With Progress Tracking
+### Watching progress
+
+Pass a `progress_callback` to get live updates. The easiest option is the same renderer the CLI uses:
 
 ```python
-from tqdm import tqdm
+from epub_commentor import comment_epub, make_default_progress_callback
 
-with tqdm(total=100, desc="Translating", unit="%") as pbar:
-    last_progress = 0.0
-
-    def on_progress(progress: float):
-        nonlocal last_progress
-        increment = (progress - last_progress) * 100
-        pbar.update(increment)
-        last_progress = progress
-
-    translate(
-        source_path="source.epub",
-        target_path="translated.epub",
-        target_language="English",
-        submit=SubmitKind.APPEND_BLOCK,
-        llm=llm,
-        on_progress=on_progress,
-    )
+progress = make_default_progress_callback(quiet=False)  # quiet=True to silence it
+comment_epub(source="book.epub", llm=llm, config=config, progress_callback=progress)
 ```
 
-## API Reference
-
-### `LLM` Class
-
-Initialize the LLM client for translation:
+Or write your own — the callback receives a `ProgressEvent` with `stage`, `current`, `total`, and a `message`:
 
 ```python
-LLM(
-    key: str,                          # API key
-    url: str,                          # API endpoint URL
-    model: str,                        # Model name (e.g., "gpt-4")
-    token_encoding: str,               # Token encoding (e.g., "o200k_base")
-    cache_path: PathLike | None = None,           # Cache directory path
-    timeout: float | None = None,                  # Request timeout in seconds
-    top_p: float | tuple[float, float] | None = None,
-    temperature: float | tuple[float, float] | None = None,
-    retry_times: int = 5,                         # Number of retries on failure
-    retry_interval_seconds: float = 6.0,          # Interval between retries
-    log_dir_path: PathLike | None = None,         # Log directory path
-)
+def on_progress(event):
+    print(f"[{event.stage}] {event.current}/{event.total}  {event.message or ''}")
+
+comment_epub(source="book.epub", llm=llm, config=config, progress_callback=on_progress)
 ```
 
-### `translate` Function
+### Picking chapters programmatically
 
-Translate an EPUB file:
+Provide a `chapter_filter` that returns one `True`/`False` per chapter (in reading order):
 
 ```python
-translate(
-    source_path: PathLike | str,       # Source EPUB file path
-    target_path: PathLike | str,       # Output EPUB file path
-    target_language: str,              # Target language (e.g., "English", "Chinese")
-    submit: SubmitKind,                # How to insert translations (REPLACE, APPEND_TEXT, or APPEND_BLOCK)
-    user_prompt: str | None = None,    # Custom translation instructions
-    max_retries: int = 5,              # Maximum retries for failed translations
-    max_group_tokens: int = 2600,      # Maximum tokens per translation group
-    concurrency: int = 1,              # Number of concurrent translation tasks (default: 1)
-    llm: LLM | None = None,            # Single LLM instance for both translation and filling
-    translation_llm: LLM | None = None,  # LLM instance for translation (overrides llm)
-    fill_llm: LLM | None = None,       # LLM instance for XML filling (overrides llm)
-    on_progress: Callable[[float], None] | None = None,  # Progress callback (0.0-1.0)
-    on_fill_failed: Callable[[FillFailedEvent], None] | None = None,  # Error callback
-)
+from epub_commentor import comment_epub, Chapter
+
+def only_real_chapters(chapters: list[Chapter]) -> list[bool]:
+    # keep chapters that actually contain paragraphs
+    return [any(True for _ in ch.body.iter("p")) for ch in chapters]
+
+comment_epub(source="book.epub", llm=llm, config=config, chapter_filter=only_real_chapters)
 ```
 
-**Note**: Either `llm` or both `translation_llm` and `fill_llm` must be provided. Using separate LLMs allows for task-specific optimization.
+### `CommentConfig` options
 
-#### Submit Modes
+| Option | Default | What it does |
+|---|---|---|
+| `book_synopsis` | `None` | One-line description to steer tone. |
+| `target_language` | `"Chinese"` | Language of the commentary. |
+| `block_size` | `6` | Paragraphs per batch. |
+| `concurrency` | `4` | Batches processed at once within a chapter. |
+| `kinds` | all three | Which note types to allow (`INTRO`, `SUMMARY`, `NOTE`). |
+| `position` | `BEFORE` | Default placement when the model doesn't specify. |
+| `max_scan_retries` | `3` | Retries on a malformed chapter overview. |
+| `max_json_retries` | `3` | Retries on malformed batch notes. |
+| `inject_css` | `True` | Whether to add the built-in stylesheet. |
+| `css_path_in_epub` | `Styles/commentary.css` | Where the stylesheet lands inside the EPUB. |
+| `fail_on_empty_chapter` | `False` | Error (instead of skip) on a chapter with no paragraphs. |
+| `cache_seed_user_id` | `"default"` | Cache namespace; change to force fresh results. |
 
-The `submit` parameter controls how translated content is inserted into the document. Use `SubmitKind` enum to specify the insertion mode:
+`comment_epub` raises a `CommentorError` if a chapter can't be annotated after all retries — catch it if you want to handle failures gracefully:
 
 ```python
-from epub_translator import SubmitKind
+from epub_commentor import comment_epub, CommentorError
 
-# Three available modes:
-# - SubmitKind.REPLACE: Replace original content with translation (single-language output)
-# - SubmitKind.APPEND_TEXT: Append translation as inline text (bilingual output)
-# - SubmitKind.APPEND_BLOCK: Append translation as block elements (bilingual output, recommended)
+try:
+    comment_epub("book.epub", llm=llm)
+except CommentorError as exc:
+    print(f"failed: {exc}")
 ```
 
-**Mode Comparison:**
+---
 
-- **`SubmitKind.REPLACE`**: Creates a single-language translation by replacing original text with translated content. Useful for creating books in the target language only.
+## FAQ
 
-- **`SubmitKind.APPEND_TEXT`**: Appends translations as inline text immediately after the original content. Both languages appear in the same paragraph, creating a continuous reading flow.
+**Does it change or translate my book?**
+No. The original text is preserved exactly. Commentor only *adds* note blocks beside it. `--target-language` controls the language of those added notes, not the book.
 
-- **`SubmitKind.APPEND_BLOCK`** (Recommended): Appends translations as separate block elements (paragraphs) after the original. This creates clear visual separation between languages, making it ideal for side-by-side bilingual reading.
+**Can I read the result on a Kindle?**
+Yes — see [Reading the result on your device](#reading-the-result-on-your-device). The output is a plain EPUB that modern Kindles and every other reader accept.
 
-**Example:**
+**How much does a book cost to annotate?**
+It depends on the book's length and your model's pricing. The summary at the end of each run reports the exact token count. Use `--cache-path` so re-runs don't pay twice, and `-i` to skip chapters you don't need.
 
-```python
-# For bilingual books (recommended)
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language=language.ENGLISH,
-    submit=SubmitKind.APPEND_BLOCK,
-    llm=llm,
-)
+**Do I need an OpenAI account specifically?**
+No — any OpenAI-compatible API works (OpenAI, Azure, DeepSeek, local gateways, …). Just point `url` and `model` at your provider.
 
-# For single-language translation
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language=language.ENGLISH,
-    submit=SubmitKind.REPLACE,
-    llm=llm,
-)
-```
-
-#### Language Constants
-
-EPUB Translator provides predefined language constants for convenience. You can use these constants instead of writing language names as strings:
-
-```python
-from epub_translator import language
-
-# Usage example:
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language=language.ENGLISH,
-    submit=SubmitKind.APPEND_BLOCK,
-    llm=llm,
-)
-
-# You can also use custom language strings:
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language="Icelandic",  # For languages not in the constants
-    submit=SubmitKind.APPEND_BLOCK,
-    llm=llm,
-)
-```
-
-### Error Handling with `on_fill_failed`
-
-Monitor translation errors using the `on_fill_failed` callback. The system automatically retries failed translations up to `max_retries` times (default: 5). Most errors are recovered during retries and don't affect the final output.
-
-```python
-from epub_translator import FillFailedEvent
-
-def handle_fill_error(event: FillFailedEvent):
-    # Only log critical errors that will affect the final EPUB
-    if event.over_maximum_retries:
-        print(f"Critical error after {event.retried_count} attempts:")
-        print(f"  {event.error_message}")
-        print("  This error will be present in the final EPUB file!")
-
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language=language.ENGLISH,
-    submit=SubmitKind.APPEND_BLOCK,
-    llm=llm,
-    on_fill_failed=handle_fill_error,
-)
-```
-
-**Understanding Error Severity:**
-
-The `FillFailedEvent` contains:
-- `error_message: str` - Description of the error
-- `retried_count: int` - Current retry attempt number (1 to max_retries)
-- `over_maximum_retries: bool` - Whether the error is critical
-
-**Error Categories:**
-
-- **Recoverable errors** (`over_maximum_retries=False`): Errors during retry attempts. The system will continue retrying and may resolve these automatically. Safe to ignore in most cases.
-
-- **Critical errors** (`over_maximum_retries=True`): Errors that persist after all retry attempts. These will appear in the final EPUB file and should be investigated.
-
-**Advanced Usage:**
-
-For verbose logging during translation debugging:
-
-```python
-def handle_fill_error(event: FillFailedEvent):
-    if event.over_maximum_retries:
-        # Critical: affects final output
-        print(f"❌ CRITICAL: {event.error_message}")
-    else:
-        # Informational: system is retrying
-        print(f"⚠️  Retry {event.retried_count}: {event.error_message}")
-```
-
-### Dual-LLM Architecture
-
-Use separate LLM instances for translation and XML structure filling with different optimization parameters:
-
-```python
-# Create two LLM instances with different temperatures
-translation_llm = LLM(
-    key="your-api-key",
-    url="https://api.openai.com/v1",
-    model="gpt-4",
-    token_encoding="o200k_base",
-    temperature=0.8,  # Higher temperature for creative translation
-)
-
-fill_llm = LLM(
-    key="your-api-key",
-    url="https://api.openai.com/v1",
-    model="gpt-4",
-    token_encoding="o200k_base",
-    temperature=0.3,  # Lower temperature for structure preservation
-)
-
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language=language.ENGLISH,
-    submit=SubmitKind.APPEND_BLOCK,
-    translation_llm=translation_llm,
-    fill_llm=fill_llm,
-)
-```
-
-## Configuration Examples
-
-### OpenAI
-
-```python
-llm = LLM(
-    key="sk-...",
-    url="https://api.openai.com/v1",
-    model="gpt-4",
-    token_encoding="o200k_base",
-)
-```
-
-### Azure OpenAI
-
-```python
-llm = LLM(
-    key="your-azure-key",
-    url="https://your-resource.openai.azure.com/openai/deployments/your-deployment",
-    model="gpt-4",
-    token_encoding="o200k_base",
-)
-```
-
-### Other OpenAI-Compatible Services
-
-Any service with an OpenAI-compatible API can be used:
-
-```python
-llm = LLM(
-    key="your-api-key",
-    url="https://your-service.com/v1",
-    model="your-model",
-    token_encoding="o200k_base",  # Match your model's encoding
-)
-```
-
-## Advanced Features
-
-### Custom Translation Prompts
-
-Provide specific translation instructions:
-
-```python
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language="English",
-    submit=SubmitKind.APPEND_BLOCK,
-    llm=llm,
-    user_prompt="Use formal language and preserve technical terminology",
-)
-```
-
-### Caching for Progress Recovery
-
-Enable caching to resume translation progress after failures:
-
-```python
-llm = LLM(
-    key="your-api-key",
-    url="https://api.openai.com/v1",
-    model="gpt-4",
-    token_encoding="o200k_base",
-    cache_path="./translation_cache",  # Translations are cached here
-)
-```
-
-### Concurrent Translation
-
-Speed up translation by processing multiple text segments concurrently. Use the `concurrency` parameter to control how many translation tasks run in parallel:
-
-```python
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language="English",
-    submit=SubmitKind.APPEND_BLOCK,
-    llm=llm,
-    concurrency=4,  # Process 4 segments concurrently
-)
-```
-
-**Performance Tips:**
-
-- Start with `concurrency=4` and adjust based on your API rate limits and system resources
-- Higher concurrency values can significantly reduce translation time for large books
-- The translation order is preserved regardless of concurrency settings
-- Monitor your API provider's rate limits to avoid throttling
-
-**Thread Safety:**
-
-When using `concurrency > 1`, ensure that any custom callback functions (`on_progress`, `on_fill_failed`) are thread-safe. Built-in callbacks are thread-safe by default.
-
-### Token Usage Monitoring
-
-Track token consumption during translation to monitor API costs and usage:
-
-```python
-from epub_translator import LLM, translate, language, SubmitKind
-
-llm = LLM(
-    key="your-api-key",
-    url="https://api.openai.com/v1",
-    model="gpt-4",
-    token_encoding="o200k_base",
-)
-
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language=language.ENGLISH,
-    submit=SubmitKind.APPEND_BLOCK,
-    llm=llm,
-)
-
-# Access token statistics after translation
-print(f"Total tokens: {llm.total_tokens}")
-print(f"Input tokens: {llm.input_tokens}")
-print(f"Input cache tokens: {llm.input_cache_tokens}")
-print(f"Output tokens: {llm.output_tokens}")
-```
-
-**Available Statistics:**
-
-- `total_tokens` - Total number of tokens used (input + output)
-- `input_tokens` - Number of prompt/input tokens
-- `input_cache_tokens` - Number of cached input tokens (when using prompt caching)
-- `output_tokens` - Number of generated/completion tokens
-
-**Real-time Monitoring:**
-
-You can also monitor token usage in real-time during translation:
-
-```python
-from tqdm import tqdm
-import time
-
-with tqdm(total=100, desc="Translating", unit="%") as pbar:
-    last_progress = 0.0
-    start_time = time.time()
-
-    def on_progress(progress: float):
-        nonlocal last_progress
-        increment = (progress - last_progress) * 100
-        pbar.update(increment)
-        last_progress = progress
-
-        # Update token stats in progress bar
-        pbar.set_postfix({
-            'tokens': llm.total_tokens,
-            'cost_est': f'${llm.total_tokens * 0.00001:.4f}'  # Estimate based on your pricing
-        })
-
-    translate(
-        source_path="source.epub",
-        target_path="translated.epub",
-        target_language=language.ENGLISH,
-        submit=SubmitKind.APPEND_BLOCK,
-        llm=llm,
-        on_progress=on_progress,
-    )
-
-    elapsed = time.time() - start_time
-    print(f"\nTranslation completed in {elapsed:.1f}s")
-    print(f"Total tokens used: {llm.total_tokens:,}")
-    print(f"Average tokens/second: {llm.total_tokens/elapsed:.1f}")
-```
-
-**Dual-LLM Token Tracking:**
-
-When using separate LLMs for translation and filling, each LLM tracks its own statistics:
-
-```python
-translation_llm = LLM(key="...", url="...", model="gpt-4", token_encoding="o200k_base")
-fill_llm = LLM(key="...", url="...", model="gpt-4", token_encoding="o200k_base")
-
-translate(
-    source_path="source.epub",
-    target_path="translated.epub",
-    target_language=language.ENGLISH,
-    submit=SubmitKind.APPEND_BLOCK,
-    translation_llm=translation_llm,
-    fill_llm=fill_llm,
-)
-
-print(f"Translation tokens: {translation_llm.total_tokens}")
-print(f"Fill tokens: {fill_llm.total_tokens}")
-print(f"Combined total: {translation_llm.total_tokens + fill_llm.total_tokens}")
-```
-
-**Note:** Token statistics are cumulative across all API calls made by the LLM instance. The counts only increase and are thread-safe when using concurrent translation.
-
-## Related Projects
-
-- [PDF Craft](https://github.com/oomol-lab/pdf-craft): If your source book is a scanned or image-based PDF, PDF Craft can convert it to EPUB first, so it is ready for translation. See this [demo video](https://www.bilibili.com/video/BV1tMQZY5EYY/) for the full scanned PDF to bilingual EPUB workflow.
-- [SpineDigest](https://github.com/oomol-lab/spinedigest): If you want more than translation and need a structural digest of the book, SpineDigest can turn an EPUB into summaries, chapter topology, and a knowledge graph.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+**Why did a chapter get skipped?**
+It had no readable paragraphs — typically a cover, table of contents, or image-only page. That's intentional. Pass `--fail-on-empty-chapter` if you'd rather be told loudly.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE). Forked from [oomol-lab/epub-translator](https://github.com/oomol-lab/epub-translator) under the same terms.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/oomol-lab/epub-translator/issues)
-- **Online App**: [Inkora - EPUB Translator](https://inkora.oomol.com/epub-translator)
+Questions or bugs? Open a [GitHub Issue](https://github.com/noau/epub-commentor/issues).

@@ -1,0 +1,45 @@
+{
+  "id": "case12_non_contiguous_partial",
+  "description": "Stage 2 returns 6 comments: 5 valid + 1 with non-contiguous target_p_ids [0, 5] (position=before). The strict validator rejects the broken comment, retries fail to fix it, and the post-retry salvage pass collapses it to a single anchor at min=0. All 6 comments reach injection.",
+  "block_size": 6,
+  "chapter": {
+    "path": "ch12.xhtml",
+    "title": "Chapter 12",
+    "paragraphs": [
+      "P0 — opening line of the chapter.",
+      "P1 — second paragraph continues the thought.",
+      "P2 — third paragraph deepens the argument.",
+      "P3 — fourth paragraph introduces a counterpoint.",
+      "P4 — fifth paragraph returns to the main line.",
+      "P5 — sixth paragraph closes the chapter."
+    ]
+  },
+  "memo": {
+    "core_thesis": "Test of the partial-success salvage path after retries fail to repair a non-contiguous comment.",
+    "outline": ["thesis", "recover", "salvage"],
+    "tone": "technical",
+    "target_audience": "developers",
+    "key_terms": [],
+    "reading_anchors": []
+  },
+  "block_responses_retry": [
+    {
+      "comments": [
+        {"target_p_ids": [0], "position": "before", "kind": "intro", "content": "intro survives"},
+        {"target_p_ids": [1], "position": "after", "kind": "note", "content": "valid note"},
+        {"target_p_ids": [0, 5], "position": "before", "kind": "note", "content": "non-contiguous — salvage collapses to [0]"},
+        {"target_p_ids": [2, 3], "position": "after", "kind": "note", "content": "valid contiguous note"},
+        {"target_p_ids": [4], "position": "before", "kind": "note", "content": "another valid note"},
+        {"target_p_ids": [5], "position": "after", "kind": "summary", "content": "summary survives"}
+      ]
+    }
+  ],
+  "expected_comments": [
+    {"target_p_ids": [0], "position": "before", "kind": "intro", "content": "intro survives"},
+    {"target_p_ids": [1], "position": "after", "kind": "note", "content": "valid note"},
+    {"target_p_ids": [0], "position": "before", "kind": "note", "content": "non-contiguous — salvage collapses to [0]"},
+    {"target_p_ids": [2, 3], "position": "after", "kind": "note", "content": "valid contiguous note"},
+    {"target_p_ids": [4], "position": "before", "kind": "note", "content": "another valid note"},
+    {"target_p_ids": [5], "position": "after", "kind": "summary", "content": "summary survives"}
+  ]
+}
