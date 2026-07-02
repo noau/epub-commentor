@@ -17,13 +17,12 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Install poetry + shiv + export plugin
+      - name: Install poetry + shiv
         run: |
           python -m pip install --upgrade pip
           python -m pip install \
             'poetry>=2.0,<3.0' \
-            'shiv>=1.0' \
-            'poetry-plugin-export>=2.0,<3.0'
+            'shiv>=1.0'
 
       - name: Install project deps (creates venv)
         # venv 里装好 epub_commentor 本体 + 所有 runtime deps（lockfile-pinned），
