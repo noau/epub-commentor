@@ -17,25 +17,28 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Install shiv + poetry (and export plugin)
+      - name: Install poetry + shiv + export plugin
         run: |
-          python3.13 -m pip install --upgrade pip
-          python3.13 -m pip install \
+          python -m pip install --upgrade pip
+          python -m pip install \
             'poetry>=2.0,<3.0' \
-            'shiv>=1.0'
+            'shiv>=1.0' \
+            'poetry-plugin-export>=2.0,<3.0'
 
-      - name: Export deps as requirements.txt
-        run: poetry export -f requirements.txt --without-hash -o reqs.txt
+      - name: Install project deps (creates venv)
+        # venv 里装好 epub_commentor 本体 + 所有 runtime deps（lockfile-pinned），
+        # shiv 后面直接以这个 venv 的 python 为 source，不再需要 export/reqs.txt
+        run: poetry install --no-interaction --only main
 
       - name: Build zipapp
         run: |
+          PY="$(poetry env info -p)/bin/python"
           shiv \
-            --python "$(which python3.13)" \
+            --python "$PY" \
             --python-version 313 \
             --platform manylinux2014_x86_64 \
             --console-script epub-commentor \
             --output epub-commentor \
-            -r reqs.txt \
             .
 
       - name: Smoke test (--help)
