@@ -10,6 +10,7 @@
   "top_p": 0.9,
   "cache_path": "./commentary_cache",
   "log_dir_path": null,
+  "json_mode": false,
   "rpm_limit": null,
   "tpm_limit": null,
   "request_concurrency": null,

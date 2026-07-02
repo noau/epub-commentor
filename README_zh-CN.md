@@ -46,6 +46,7 @@
   - [一次真实的首跑](#一次真实的首跑)
 - [交互式挑选章节](#交互式挑选章节)
 - [调整评注效果](#调整评注效果)
+- [强制 JSON 输出](#强制-json-输出)
 - [命令参数一览](#命令参数一览)
 - [在你的设备上阅读](#在你的设备上阅读)
 - [用缓存省钱](#用缓存省钱)
@@ -110,6 +111,7 @@ cp format.template.json format.json
   "retry_interval_seconds": 6.0,
   "temperature": 0.4,
   "top_p": 0.9,
+  "json_mode": false,
   "cache_path": "./commentary_cache",
   "log_dir_path": null
 }
@@ -126,6 +128,7 @@ cp format.template.json format.json
 | `retry_interval_seconds` | 否 | 两次重试之间等待的秒数。 | 默认 `6.0`。 |
 | `temperature` | 否 | 文字的发挥程度，`0.0`–`1.0`。 | `0.4` 让评注既有文采又不跑题。越高越多变，越低越贴字面。 |
 | `top_p` | 否 | temperature 的替代项（核采样）。 | 保持 `0.9` 即可，或填 `null` 忽略它。 |
+| `json_mode` | 否 | 强制每次 chat-completion 调用都带上 `response_format={"type": "json_object"}`。 | `false`（默认）= 不约束；`true` = 强制合法 JSON 输出。详见[强制 JSON 输出](#强制-json-输出)。 |
 | `cache_path` | 否 | 存放响应的文件夹，让重跑免费。 | 见[用缓存省钱](#用缓存省钱)。留空或 `null` 表示不缓存。 |
 | `log_dir_path` | 否 | 存放调试日志的文件夹。 | `null` = 关闭。见[出问题时怎么办](#出问题时怎么办)。 |
 | `rpm_limit` | 否 | 每 60 秒滑动窗口内最多发多少请求。 | `null` = 不限。详见[免费 LLM 速率限制](#免费-llm-速率限制)。 |
@@ -276,6 +279,32 @@ poetry run epub-commentor path/to/source.epub \
 - **重试也计入。** 每次重试都过限流器，所以网络抖动也不会让你的 `rpm_limit` 被刺穿。
 - **429 仍然会重试。** 万一有 429 漏出来（比如同 key 还有别的进程），执行器会退避重试——`is_retry_error` 现在认识 `openai.RateLimitError`。
 - **`token_count_buffer` 是安全阀。** 设了 `tpm_limit` 后仍出现 `429`，就调大它（比如 `1.5`）——它会按倍数高估每次请求的成本再扣 TPM 窗口。
+
+---
+
+## 强制 JSON 输出
+
+Commentor 每次发给 LLM 的调用（章节概览、每个批次的评注）都期望拿回一个**合法 JSON object**。Prompt 里要求了 JSON、再加上 pydantic + 多轮 retry 兜底，可以清理绝大多数漏网之鱼——但你可以走更干脆的路：直接打开 API 级的 JSON 模式。
+
+OpenAI、DeepSeek 以及大多数 OpenAI 兼容服务都支持一个参数，让模型只能输出 JSON object：`response_format={"type": "json_object"}`。Commentor 把它包装成一个布尔开关：
+
+```json
+{
+  "key": "sk-your-secret-api-key",
+  "url": "https://api.deepseek.com/v1",
+  "model": "deepseek-chat",
+  "token_encoding": "cl100k_base",
+  "json_mode": true
+}
+```
+
+要点：
+
+- **默认是 `false`**——`json_mode` 为 `false`（或干脆没填）时，Commentor 完全不发送 `response_format` 参数，现有行为原样保留。
+- **一个旋钮覆盖所有调用。** 章节概览和每批评注都自动受惠，不需要按阶段分别配置。
+- **并非所有服务商都支持。** 不识别这个字段的服务商会通过正常的 retry 路径报错。在不支持的服务商上保持 `false` 即可。
+- **流式照常工作。** Commentor 仍然按 chunk 读取响应，实时进度显示不受影响。
+- **便于调试。** 启用了 `log_dir_path` 后，每次请求日志的 `[[Parameters]]` 段都会在 `temperature`、`top_p` 等旁边记下当前生效的 `json_mode` 值。
 
 ---
 

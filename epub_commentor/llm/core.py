@@ -32,6 +32,13 @@ class LLM:
         cache_path: PathLike | str | None = None,
         log_dir_path: PathLike | str | None = None,
         extra_body: dict[str, object] | None = None,
+        # When ``True``, every chat-completion call sets
+        # ``response_format={"type": "json_object"}`` — supported by
+        # OpenAI, DeepSeek, and most other OpenAI-compatible providers.
+        # Tells the model to emit only a valid JSON object, which
+        # short-circuits the multi-turn retry loop for malformed JSON.
+        # ``False`` (default) leaves the SDK's behaviour untouched.
+        json_mode: bool = False,
         # Rate-limit knobs (all default to unlimited). Useful for free
         # LLM tiers like Zhipu / GLM that publish a per-key ceiling:
         #   rpm_limit           — max requests per 60s window.
@@ -78,6 +85,7 @@ class LLM:
             statistics=self._statistics,
             extra_body=extra_body,
             rate_limiter=self._rate_limiter,
+            json_mode=json_mode,
         )
 
     @property

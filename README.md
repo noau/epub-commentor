@@ -46,6 +46,7 @@
   - [A realistic first run](#a-realistic-first-run)
 - [Choosing chapters interactively](#choosing-chapters-interactively)
 - [Tuning the commentary](#tuning-the-commentary)
+- [Forcing JSON output](#forcing-json-output)
 - [Command reference](#command-reference)
 - [Reading the result on your device](#reading-the-result-on-your-device)
 - [Saving money with the cache](#saving-money-with-the-cache)
@@ -110,6 +111,7 @@ Then open `format.json` and fill it in. Here's a complete example with **every f
   "retry_interval_seconds": 6.0,
   "temperature": 0.4,
   "top_p": 0.9,
+  "json_mode": false,
   "cache_path": "./commentary_cache",
   "log_dir_path": null
 }
@@ -126,6 +128,7 @@ Then open `format.json` and fill it in. Here's a complete example with **every f
 | `retry_interval_seconds` | No | Seconds to wait between retries. | Default `6.0`. |
 | `temperature` | No | Creativity of the writing, `0.0`–`1.0`. | `0.4` keeps notes expressive but on-topic. Higher = more varied, lower = more literal. |
 | `top_p` | No | Alternative to temperature (nucleus sampling). | Leave as `0.9`, or set `null` to ignore. |
+| `json_mode` | No | Force every chat-completion call to request `response_format={"type": "json_object"}`. | `false` (default) = unconstrained. `true` = force valid-JSON output. See [Forcing JSON output](#forcing-json-output). |
 | `cache_path` | No | Folder to store responses so re-runs are free. | See [Saving money with the cache](#saving-money-with-the-cache). Omit or `null` to disable. |
 | `log_dir_path` | No | Folder for detailed debug logs. | `null` = off. See [When something goes wrong](#when-something-goes-wrong). |
 | `rpm_limit` | No | Max LLM requests per 60-second sliding window. | `null` = no limit. See [Rate limiting for free LLM tiers](#rate-limiting-for-free-llm-tiers). |
@@ -276,6 +279,32 @@ Notes:
 - **Retries count.** Every retry attempt passes through the rate limiter, so a flapping connection won't punch through your `rpm_limit`.
 - **429 is still retried.** If a 429 ever leaks through (e.g. another process sharing the same API key), the executor backs off and retries — `is_retry_error` now recognises `openai.RateLimitError`.
 - **`token_count_buffer` is your safety valve.** Raise it (e.g. `1.5`) if you still see `429` after setting `tpm_limit`; it over-estimates the per-request cost before charging the TPM window.
+
+---
+
+## Forcing JSON output
+
+Every LLM call Commentor makes (the chapter overview and each block's annotation) expects a **valid JSON object** back from the model. The prompts ask for it in text, and pydantic + a multi-turn retry loop clean up whatever slips through — but you can short-circuit that whole detour by turning on the API-level JSON mode.
+
+OpenAI, DeepSeek, and most other OpenAI-compatible providers honour a parameter that tells the model to only emit a JSON object: `response_format={"type": "json_object"}`. Commentor wraps that into a single boolean:
+
+```json
+{
+  "key": "sk-your-secret-api-key",
+  "url": "https://api.deepseek.com/v1",
+  "model": "deepseek-chat",
+  "token_encoding": "cl100k_base",
+  "json_mode": true
+}
+```
+
+Notes:
+
+- **Default is `false`** — when `json_mode` is `false` (or absent), Commentor never sends `response_format` to the SDK and your existing behaviour is preserved.
+- **One knob, every call.** Both the chapter-overview call and the per-block annotation call pick it up; there's nothing to wire per stage.
+- **Provider support is not universal.** A provider that rejects an unknown field will surface the error through the normal retry loop. Keep it `false` on providers that don't recognise it.
+- **Streaming still works.** Commentor reads the response in chunks regardless of JSON mode, so nothing changes about the live progress display.
+- **Debug-friendly.** When `log_dir_path` is set, the `[[Parameters]]` section of every request log now records the active `json_mode` value alongside `temperature`, `top_p`, etc.
 
 ---
 

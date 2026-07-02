@@ -25,6 +25,7 @@ class LLMExecutor:
         statistics: Statistics,
         extra_body: dict[str, object] | None = None,
         rate_limiter: LLMRateLimiter | None = None,
+        json_mode: bool = False,
     ) -> None:
         self._model_name: str = model
         self._timeout: float | None = timeout
@@ -33,6 +34,7 @@ class LLMExecutor:
         self._statistics = statistics
         self._extra_body: dict[str, object] | None = extra_body
         self._rate_limiter: LLMRateLimiter | None = rate_limiter
+        self._json_mode: bool = json_mode
         self._client = OpenAI(
             api_key=api_key,
             base_url=url,
@@ -57,6 +59,7 @@ class LLMExecutor:
                 f"\t\ntemperature={temperature}",
                 f"\t\ntop_p={top_p}",
                 f"\t\nmax_tokens={max_tokens}",
+                f"\t\njson_mode={self._json_mode}",
             ]
             if cache_key is not None:
                 parameters.append(f"\t\ncache_key={cache_key}")
@@ -215,6 +218,7 @@ class LLMExecutor:
             top_p=top_p if top_p is not None else omit,
             temperature=temperature if temperature is not None else omit,
             max_tokens=max_tokens if max_tokens is not None else omit,
+            response_format={"type": "json_object"} if self._json_mode else omit,
             extra_body=self._extra_body,
         )
         buffer = StringIO()

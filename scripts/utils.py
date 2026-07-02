@@ -19,8 +19,15 @@ def load_comment_llm(**args) -> LLM:
       "retry_interval_seconds": 6.0,
       "temperature": 0.4,
       "top_p": 0.9,
+      "json_mode": false,
       "cache_path": "<optional cache dir>"
     }
+
+    Set ``json_mode`` to ``true`` to force every chat-completion call to
+    send ``response_format={"type": "json_object"}`` to the provider —
+    supported by OpenAI, DeepSeek, and most other OpenAI-compatible
+    services. Leave it ``false`` (default) to keep the SDK's unconstrained
+    behaviour.
     """
     config = read_format_json()
     return LLM(**config, **args)
