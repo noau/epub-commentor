@@ -34,7 +34,6 @@ jobs:
           PY="$(poetry env info -p)/bin/python"
           shiv \
             --python "$PY" \
-            --python-version 313 \
             --console-script epub-commentor \
             --output-file epub-commentor \
             .
