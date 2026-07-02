@@ -33,6 +33,7 @@ from .commentor import ChapterFilter, CommentorResult, comment_epub
 from .config import CommentConfig
 from .errors import CommentAbortError, CommentorError
 from .llm import LLM
+from .llm._api_key import EPUB_COMMENTOR_API_KEY_ENV_VAR, resolve_api_key
 from .llm.schema import CommentKind, CommentPosition
 from .pipeline import AnnotationFilter, ChapterAnnotation
 from .pipeline.extract import Chapter
@@ -273,7 +274,11 @@ def _read_format_json(format_path: Path) -> dict:
     """Read and parse ``format.json``, exiting with a clear message on failure."""
     if not format_path.exists():
         print(f"format.json not found at: {format_path}", file=sys.stderr)
-        print("Copy format.template.json to format.json and fill in the API key.", file=sys.stderr)
+        print(
+            f"Copy format.template.json to format.json (or set ${EPUB_COMMENTOR_API_KEY_ENV_VAR} "
+            f"to provide the API key without a config file).",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
     try:
@@ -355,10 +360,25 @@ def _split_format_config(raw: dict) -> tuple[dict, dict, list[str]]:
 
 def _construct_llm(llm_kwargs: dict, format_path: Path) -> LLM:
     """Build the production :class:`LLM` from the routed LLM kwargs."""
+    # API key resolution: ``$EPUB_COMMENTOR_API_KEY`` env var takes
+    # precedence over the ``key`` field in ``format.json``. The earlier
+    # ``_split_format_config()`` routed whatever it found under "key"
+    # into ``llm_kwargs``; we override it here before touching ``LLM(...)``,
+    # which treats ``key`` as a required positional arg.
+    llm_kwargs["key"] = resolve_api_key(llm_kwargs.get("key"))
+    if not llm_kwargs["key"]:
+        print(
+            f"failed to construct LLM from {format_path}: missing API key.\n"
+            f"Set the ${EPUB_COMMENTOR_API_KEY_ENV_VAR} environment variable "
+            f'(recommended for safety) or fill the "key" field in {format_path}.\n'
+            f"See format.template.json for the field list.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     try:
         return LLM(**llm_kwargs)
     except TypeError as exc:
-        # A required field (key / url / model / token_encoding) is missing.
+        # A required field (url / model / token_encoding) is missing.
         print(f"failed to construct LLM from {format_path}: {exc}", file=sys.stderr)
         sys.exit(2)
 

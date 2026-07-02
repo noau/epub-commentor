@@ -38,11 +38,13 @@ from epub_commentor.cli import (
     _build_config,
     _build_parser,
     _chapter_preview,
+    _construct_llm,
     _make_review_choice,
     _resolve_format_json_path,
 )
 from epub_commentor.config import CommentConfig
 from epub_commentor.epub.zip import Zip
+from epub_commentor.llm._api_key import EPUB_COMMENTOR_API_KEY_ENV_VAR
 from epub_commentor.llm.schema import ChapterMemo, CommentItem, CommentKind, CommentPosition
 from epub_commentor.pipeline import ChapterAnnotation
 from epub_commentor.pipeline.extract import Chapter, extract_chapters
@@ -281,6 +283,120 @@ class TestResolveFormatJsonPath:
         # No file exists; we still return the resolved path. The caller
         # (cli._load_llm) is responsible for the "not found" error.
         assert result == (tmp_path / "format.json").resolve()
+
+
+class TestConstructLlmApiKey:
+    """``_construct_llm`` resolves the API key with env-var precedence
+    and exits with code 2 when neither source yields one.
+
+    These tests deliberately mutate ``$EPUB_COMMENTOR_API_KEY``; the
+    :func:`pytest.MonkeyPatch` fixture restores it automatically.
+    """
+
+    def test_env_var_supplies_key_when_format_key_missing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setenv(EPUB_COMMENTOR_API_KEY_ENV_VAR, "sk-from-env")
+
+        captured_kwargs: dict = {}
+
+        def _fake_llm(**kwargs) -> object:
+            captured_kwargs.update(kwargs)
+            return object()
+
+        # Patch the symbol bound into the cli module — not the original.
+        with mock.patch("epub_commentor.cli.LLM", side_effect=_fake_llm):
+            _construct_llm({"key": None, "url": "x", "model": "m", "token_encoding": "o200k_base"}, Path("format.json"))
+
+        assert captured_kwargs["key"] == "sk-from-env"
+        # No stderr / exit noise on the happy path.
+        assert capsys.readouterr().err == ""
+
+    def test_env_var_wins_over_format_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(EPUB_COMMENTOR_API_KEY_ENV_VAR, "sk-from-env")
+
+        captured_kwargs: dict = {}
+
+        def _fake_llm(**kwargs) -> object:
+            captured_kwargs.update(kwargs)
+            return object()
+
+        with mock.patch("epub_commentor.cli.LLM", side_effect=_fake_llm):
+            _construct_llm(
+                {"key": "sk-from-json", "url": "x", "model": "m", "token_encoding": "o200k_base"},
+                Path("format.json"),
+            )
+
+        assert captured_kwargs["key"] == "sk-from-env"
+
+    def test_exits_with_clear_message_when_no_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.delenv(EPUB_COMMENTOR_API_KEY_ENV_VAR, raising=False)
+
+        with mock.patch("epub_commentor.cli.LLM", side_effect=AssertionError("LLM should not be called")):
+            with pytest.raises(SystemExit) as excinfo:
+                _construct_llm(
+                    {"key": None, "url": "x", "model": "m", "token_encoding": "o200k_base"},
+                    Path("format.json"),
+                )
+        assert excinfo.value.code == 2
+        err = capsys.readouterr().err
+        assert EPUB_COMMENTOR_API_KEY_ENV_VAR in err
+        assert "missing API key" in err
+
+    def test_exits_when_format_key_is_placeholder(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``<YOUR_API_KEY>`` left in format.json is treated as missing."""
+        monkeypatch.delenv(EPUB_COMMENTOR_API_KEY_ENV_VAR, raising=False)
+
+        with mock.patch("epub_commentor.cli.LLM", side_effect=AssertionError("LLM should not be called")):
+            with pytest.raises(SystemExit) as excinfo:
+                _construct_llm(
+                    {"key": "<YOUR_API_KEY>", "url": "x", "model": "m", "token_encoding": "o200k_base"},
+                    Path("format.json"),
+                )
+        assert excinfo.value.code == 2
+
+    def test_preserves_other_kwargs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(EPUB_COMMENTOR_API_KEY_ENV_VAR, "sk-from-env")
+
+        captured_kwargs: dict = {}
+
+        def _fake_llm(**kwargs) -> object:
+            captured_kwargs.update(kwargs)
+            return object()
+
+        with mock.patch("epub_commentor.cli.LLM", side_effect=_fake_llm):
+            _construct_llm(
+                {
+                    "key": "sk-from-json",
+                    "url": "https://example.com/v1",
+                    "model": "gpt-4o",
+                    "token_encoding": "o200k_base",
+                    "temperature": 0.3,
+                },
+                Path("format.json"),
+            )
+
+        assert captured_kwargs["url"] == "https://example.com/v1"
+        assert captured_kwargs["model"] == "gpt-4o"
+        assert captured_kwargs["token_encoding"] == "o200k_base"
+        assert captured_kwargs["temperature"] == 0.3
+        assert captured_kwargs["key"] == "sk-from-env"
 
 
 # ---------------------------------------------------------------------------

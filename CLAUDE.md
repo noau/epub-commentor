@@ -33,7 +33,7 @@ poetry run pytest tests/test_xml_like.py::TestXMLLikeNode::test_method -v
 # 跑全部 10 个评注 challenge 回归（驱动 MockLLM，零网络）
 poetry run python scripts/comment_challenge.py
 
-# CLI 评注主入口（需先 cp format.template.json format.json 并填 API key）
+# CLI 评注主入口（API key 优先从 $EPUB_COMMENTOR_API_KEY 读，否则 cp format.template.json format.json）
 poetry run python scripts/comment_epub.py path/to/source.epub --synopsis "..."
 # 或安装后用 entrypoint：
 poetry run epub-commentor path/to/source.epub
@@ -53,7 +53,9 @@ poetry run ruff format epub_commentor tests
 poetry run pyright epub_commentor
 ```
 
-`format.json` 由用户从 `format.template.json` 复制并填入 API key/URL 等。`scripts/comment_epub.py` 与 `epub_commentor.cli` 都通过同一份 `format.json` 构造**单个** LLM（`LLM(**cfg)` 直接散开顶层字段）。
+`format.json` 由用户从 `format.template.json` 复制并填入 URL / model / token_encoding 等；`key` 字段可省略，改用 env var（见下文）。`scripts/comment_epub.py` 与 `epub_commentor.cli` 都通过同一份 `format.json` 构造**单个** LLM（`LLM(**cfg)` 直接散开顶层字段）。
+
+> **API key 解析顺序（十二要素风格）**：CLI / `scripts/utils.py:load_comment_llm` 在构造 LLM 前先调用 `epub_commentor.llm._api_key.resolve_api_key()` —— `$EPUB_COMMENTOR_API_KEY` 环境变量优先于 `format.json` 的 `key` 字段；两者都缺失或 `key` 是 `<PLACEHOLDER>` 时返回 `None`，CLI 层会 `sys.exit(2)` 给出清晰提示。`LLM.__init__` 的契约保持不变（`key` 显式必填），只是 CLI / scripts 这两条 loader 路径自动 resolve。
 
 > Never call git commit or do any git changes. Only give suggestions. Suggest git logs in form: `<kind>(<scope>): <summary>` without body.
 
@@ -105,7 +107,8 @@ poetry run pyright epub_commentor
 - **`epub_commentor/errors.py`**（[已实现]）— `CommentorError(ValueError)` 基类 + 5 子类，全部继承自 `ValueError`
 
 - **`epub_commentor/llm/`**（[已实现]）
-  - `_debug_logger.py:make_request_logger` — per-request FileHandler 工厂（共享给生产 `LLM` 和 `MockLLM`），按 UTC 秒级时间戳命名，秒内冲突自动 `_2/_3/...` 后缀
+  - `_debug_logger.py:make_request_logger` — per-request FileHandler 工厂（共享给生产 `LLM` 和 `MockLLM`），按 UTC 秒级时间戳命名,秒内冲突自动 `_2/_3/...` 后缀
+  - `_api_key.py:resolve_api_key` — API key 解析：`$EPUB_COMMENTOR_API_KEY` env var 优先于 `format.json.key`，占位符 `<...>` 与空串视为缺失；CLI 与 `scripts/utils.py:load_comment_llm` 在构造 `LLM` 前调用
   - `core.py:LLM` — 持有 `tiktoken` 编码、Jinja 模板环境、缓存/日志目录、token 统计；`_create_logger` 委托给 `_debug_logger.make_request_logger`
   - `context.py:LLMContext` — 上下文管理器：计算请求哈希 → 命中缓存则返回 → 否则走 executor → 临时文件 → 退出时 commit（多线程下用 `_CACHE_COMMIT_LOCK` 串行化）；`__enter__` 创建 per-context logger（跨 retry 累积进同一文件），暴露 `ctx.logger` 给 Stage 1/2 写错误段；命中/未命中 cache 时打 `[[CacheCheck]]`
   - `executor.py:LLMExecutor` — 流式调用 OpenAI SDK，按 `error.is_retry_error()` 重试 `retry_times` 次，间隔 `retry_interval_seconds`，把每 chunk 的 `usage` 累加进 `Statistics`；`request(logger=...)` 接收外部 logger 并写 `[[Parameters]] / [[Request]] / [[Response]] / [[Error]]` 段

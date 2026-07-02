@@ -40,6 +40,7 @@
 - [安装](#安装)
 - [准备一个 API key](#准备一个-api-key)
 - [配置 `format.json`](#配置-formatjson)
+  - [API key 放在哪里?](#api-key-放在哪里)
   - [服务商示例](#服务商示例)
   - [`format.json` 也能写流水线选项](#formatjson-也能写流水线选项)
 - [运行](#运行)
@@ -119,7 +120,7 @@ cp format.template.json format.json
 
 | 字段 | 必填？ | 填什么 | 说明 |
 |---|---|---|---|
-| `key` | **是** | 你的 API key。 | 请保密——别把 `format.json` 提交到公开仓库。 |
+| `key` | 见下文* | 你的 API key。 | *详见 [API key 放在哪里?](#api-key-放在哪里)。请保密——别把 `format.json` 提交到公开仓库。 |
 | `url` | **是** | API 基础地址，以 `/v1` 结尾。 | 见下方服务商对照表。 |
 | `model` | **是** | 模型名称。 | 如 `gpt-4o`、`deepseek-chat`，或你的 Azure 部署名。 |
 | `token_encoding` | **是** | 你模型使用的分词器名称。 | 仅用于在进度条里统计 token。GPT-4o / GPT-4.1 / o 系列用 `o200k_base`，较老的 GPT-4 / GPT-3.5 用 `cl100k_base`。拿不准就用 `o200k_base`。 |
@@ -147,13 +148,45 @@ cp format.template.json format.json
 
 > **`format.json` 可以放在书旁边。** Commentor 按以下顺序查找它：`--format-json` 指定的路径、源 EPUB 同目录、当前工作目录。
 
+### API key 放在哪里?
+
+为了让 secret 不落盘到 git,Commentor 优先读环境变量,再回退到 `format.json` 的 `key` 字段。两条规则:
+
+1. **`$EPUB_COMMENTOR_API_KEY` 环境变量**——一旦设置(且非空),就**完全忽略** `format.json` 里的 `key`。
+2. **`format.json` 的 `key` 字段**——只在环境变量未设置时使用。空 / 缺失 / `<PLACEHOLDER>` 都被视为"没有"。
+
+**推荐做法**:把 key 留在 shell 里,`format.json` 里**整行删掉 `"key"`**:
+
+```bash
+export EPUB_COMMENTOR_API_KEY="sk-your-secret-api-key"
+```
+
+```json
+{
+  "url": "https://api.openai.com/v1",
+  "model": "gpt-4o",
+  "token_encoding": "o200k_base"
+}
+```
+
+这样 `format.json` 可以放心提交到公开仓库——里面根本没有 secret。CI 可以在环境里 export 同样的变量,Docker / direnv / 系统 keychain 也都能用同一个名字。
+
+两个地方同时设置(env 和文件里都写了 key)也完全合法,只是 **env 永远赢**——这让你既能在本地把 key 留在文件里方便调试,又能在 CI 用 env 兜底。
+
+如果你忘了 export env 且 `format.json` 里也没填 key,Commentor 会明确报错并退出:
+```
+failed to construct LLM from format.json: missing API key.
+Set the $EPUB_COMMENTOR_API_KEY environment variable (recommended for safety)
+or fill the "key" field in format.json.
+```
+
+
 ### `format.json` 也能写流水线选项
 
 `format.json` 不只放凭据。你可以把任意**流水线选项**写进同一个扁平文件，作为持久默认值——省得每次运行都重敲同样的旗标：
 
 ```json
 {
-  "key": "sk-your-secret-api-key",
   "url": "https://api.openai.com/v1",
   "model": "gpt-4o",
   "token_encoding": "o200k_base",
@@ -380,9 +413,9 @@ poetry run epub-commentor "book.epub" --synopsis "..." --debug
 
 | 现象 | 可能原因 / 解决 |
 |---|---|
-| `format.json not found` | 你没复制模板。运行 `cp format.template.json format.json` 并填写。 |
+| `format.json not found` | 你没复制模板。运行 `cp format.template.json format.json` 并填写,或者把 key 放在 `$EPUB_COMMENTOR_API_KEY` 环境变量里(更安全)。 |
 | `format.json is not valid JSON` | 有拼写错误——通常是多了逗号或少了引号。用任意 JSON 校验器检查。 |
-| 认证 / 401 错误 | `key` 或 `url` 填错了。对照服务商核对两者。 |
+| 认证 / 401 错误 | `key`(环境变量 `EPUB_COMMENTOR_API_KEY` 或 `format.json` 里)或 `url` 填错了。对照服务商核对两者。 |
 | 长章节超时 | 调大 `format.json` 里的 `timeout`（如 `600.0`），或调小 `--block-size`。 |
 | 速率限制错误 | 调小 `--concurrency`（试试 `2` 或 `1`）。 |
 | 某章没有评注 | 它可能没有真正的段落（封面或导航页）——这是正常的，会被跳过。用 `-i` 看清各章情况。 |

@@ -119,7 +119,7 @@ Then open `format.json` and fill it in. Here's a complete example with **every f
 
 | Field | Required? | What to put | Notes |
 |---|---|---|---|
-| `key` | **Yes** | Your API key. | Keep this secret — don't commit `format.json` to a public repo. |
+| `key` | Optional* | Your API key. | *See [Where does the API key come from?](#where-does-the-api-key-come-from) below. Keep this secret — don't commit `format.json` to a public repo. |
 | `url` | **Yes** | The API base URL, ending in `/v1`. | See the provider table below. |
 | `model` | **Yes** | The model name. | e.g. `gpt-4o`, `deepseek-chat`, or your Azure deployment name. |
 | `token_encoding` | **Yes** | The tokenizer name your model uses. | Used only to count tokens for the progress display. Use `o200k_base` for GPT-4o / GPT-4.1 / o-series, `cl100k_base` for older GPT-4 / GPT-3.5. When unsure, `o200k_base` is a safe default. |
@@ -147,13 +147,45 @@ Then open `format.json` and fill it in. Here's a complete example with **every f
 
 > **You can keep `format.json` next to your books.** Commentor looks for it in three places, in order: the path you pass with `--format-json`, then next to the source EPUB, then in the current folder.
 
+### Where does the API key come from?
+
+The loader checks two places, in this order:
+
+1. **`$EPUB_COMMENTOR_API_KEY`** environment variable. If set, it **wins** and `format.json`'s `key` field is ignored entirely.
+2. **`format.json`**'s `key` field. Empty / missing / `<PLACEHOLDER>` values are treated as missing.
+
+Prefer the env var for safety. Twelve-factor style keeps secrets out of checked-in files — set the env var in your shell profile, in CI's secret store, or via `direnv`, and **omit the `"key"` line from `format.json` entirely**:
+
+```bash
+export EPUB_COMMENTOR_API_KEY="sk-your-secret-api-key"
+```
+
+A safe-to-commit `format.json` (no secret anywhere):
+
+```json
+{
+  "url": "https://api.openai.com/v1",
+  "model": "gpt-4o",
+  "token_encoding": "o200k_base"
+}
+```
+
+Both places may be set at the same time (env var wins); this lets you check `format.json` into a public repo with **no `key` field at all** while keeping your actual key in a shell env that's never committed.
+
+If you forget to `export` the env var AND `format.json` has no `key` field, Commentor exits with a clear message:
+
+```
+failed to construct LLM from format.json: missing API key.
+Set the $EPUB_COMMENTOR_API_KEY environment variable (recommended for safety)
+or fill the "key" field in format.json.
+```
+
 ### Also valid in `format.json`: pipeline options
 
 `format.json` isn't only for credentials. You can drop any **pipeline option** into the same flat file to make it a persistent default — handy when you don't want to retype the same flag on every run:
 
 ```json
 {
-  "key": "sk-your-secret-api-key",
   "url": "https://api.openai.com/v1",
   "model": "gpt-4o",
   "token_encoding": "o200k_base",
@@ -380,9 +412,9 @@ Each log file records the full request, the raw response, and — if a batch had
 
 | Symptom | Likely cause / fix |
 |---|---|
-| `format.json not found` | You didn't copy the template. Run `cp format.template.json format.json` and fill it in. |
+| `format.json not found` | You didn't copy the template. Run `cp format.template.json format.json` and fill it in (or set `$EPUB_COMMENTOR_API_KEY` to provide the API key without a config file — recommended for safety). |
 | `format.json is not valid JSON` | A typo — usually a trailing comma or missing quote. Validate it in any JSON linter. |
-| Authentication / 401 errors | Wrong `key` or `url`. Double-check both with your provider. |
+| Authentication / 401 errors | Wrong `key` (in `$EPUB_COMMENTOR_API_KEY` env var or in `format.json`'s `key` field) or wrong `url`. Double-check both with your provider. |
 | Timeouts on long chapters | Raise `timeout` in `format.json` (e.g. `600.0`), or lower `--block-size`. |
 | Rate-limit errors | Lower `--concurrency` (try `2` or `1`). |
 | A chapter got no notes | It may have no real paragraphs (a cover or nav page) — that's normal and it's skipped. Use `-i` to see what's what. |

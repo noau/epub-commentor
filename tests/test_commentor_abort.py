@@ -348,6 +348,11 @@ class TestCliMainReturns130:
         src = tmp_path / "in.epub"
         src.write_bytes(b"")
 
+        # Inject a fake API key via env so ``_construct_llm`` doesn't bail
+        # out before ``comment_epub`` is invoked. Without this the test
+        # leaks the developer's local ``format.json`` state into it.
+        monkeypatch.setenv("EPUB_COMMENTOR_API_KEY", "fake-key-for-test")
+
         rc = cli_main()
         assert rc == 130
         captured = capsys.readouterr()

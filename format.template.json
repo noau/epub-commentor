@@ -1,5 +1,5 @@
 {
-  "key": "<YOUR_API_KEY>",
+  "key": null,
   "url": "https://sample-llm.com/v1",
   "model": "sample-llm-model",
   "token_encoding": "sample-token-encoding",
