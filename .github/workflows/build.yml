@@ -22,8 +22,7 @@ jobs:
           python3.13 -m pip install --upgrade pip
           python3.13 -m pip install \
             'poetry>=2.0,<3.0' \
-            'shiv>=1.0' \
-            'poetry-plugin-export>=2.0,<3.0'
+            'shiv>=1.0'
 
       - name: Export deps as requirements.txt
         run: poetry export -f requirements.txt --without-hash -o reqs.txt
