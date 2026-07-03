@@ -52,6 +52,7 @@
   - [批处理推荐 `format.json`](#批处理推荐-formatjson)
   - [按场景区分的 CLI 模板](#按场景区分的-cli-模板)
   - [输出处理建议](#输出处理建议)
+- [常驻守护进程 (`epubctl`)](#常驻守护进程-epubctl)
 - [强制 JSON 输出](#强制-json-输出)
 - [命令参数一览](#命令参数一览)
 - [在你的设备上阅读](#在你的设备上阅读)
@@ -434,142 +435,34 @@ poetry run epub-commentor book.epub \
 
 ---
 
-## 云端守护进程 (epubctl)
+## 常驻守护进程 (`epubctl`)
 
-跑一本 500 章的书要两小时,SSH 中断就一切回到 0;想看"哪本卡在哪、用了多少 token"得登终端盯;5 本书排队只能串行手动,磁盘还会被 LLM 缓存+日志撑爆。
+当你在服务器上批量评注一堆书时,一次性的 CLI 会逼着你守着每一轮:SSH 断了就完、看不到进度、磁盘会被 LLM 缓存+日志撑爆。`epub-commentor` 自带一个**本地守护进程**(`epubctl` + `python -m epub_commentor.daemon`)——基于 SQLite 的队列 + 单进程 worker + 本地 CLI 客户端,无 HTTP、无鉴权、无额外进程。
 
-`epub-commentor` 自带一个**本地守护进程**(`epubctl` + `python -m epub_commentor.daemon`),专门解决这些问题。它不开放 HTTP 接口、不需要鉴权、不走 subprocess(直接复用 `comment_epub()`),只用一个 SQLite 文件管理队列。
+> **完整文档在 [`docs/daemon_zh-CN.md`](./docs/daemon_zh-CN.md)**——架构、所有 `epubctl` 子命令、任务状态机、崩溃恢复、磁盘熔断、systemd + Docker 部署、故障排查都在里面。本节只做导览。
 
-### 架构
-
-```
-┌────────────────┐
-│ epubctl submit │ ─── 直接 INSERT jobs ──┐
-│ epubctl status │ ◀── 直接 SELECT ────────┤
-│ epubctl cancel │ ── INSERT signals ──────┤
-└────────────────┘                        ▼
-                              ┌──────────────────────┐
-                              │ daemon.sqlite (WAL)  │
-                              │ jobs/events/signals  │
-                              └──────────────────────┘
-                                          ▲
-                              ┌───────────┴────────────┐
-                              │ python -m              │
-                              │ epub_commentor.daemon  │
-                              │  worker_loop 单线程    │
-                              └────────────────────────┘
-```
-
-每本任务一个独立 workspace:
-
-```
-<workspace>/jobs/job_<id>/
-├── input.epub              # submit 时拷贝进来
-├── output.commented.epub   # SUCCESS 时写
-├── cache/                  # LLM 缓存 (--cache-path)
-├── logs/                   # LLM 调试日志
-├── commentor.log           # daemon 自身输出
-└── meta.json               # CommentorResult 快照
-```
-
-### 快速上手
+典型 workflow:
 
 ```bash
-# 1. 准备配置(可选,全部有合理默认值)
-cat > ~/daemon/format.daemon.json <<'EOF'
-{
-  "workspace_dir": "/home/you/daemon",
-  "disk": { "min_free_gb": 2.0, "min_free_percent": 10.0 },
-  "max_retries": 3,
-  "log_level": "INFO"
-}
-EOF
-
-# 2. 把 API key 放在环境里(daemon 用同一份 resolve_api_key)
+# 终端 1:启动守护进程(阻塞前台)
+mkdir -p ~/epub-daemon
 export EPUB_COMMENTOR_API_KEY=sk-...
+poetry run python -m epub_commentor.daemon --workspace ~/epub-daemon
 
-# 3. 启动 daemon(单 worker, 阻塞前台)
-mkdir -p ~/daemon
-poetry run python -m epub_commentor.daemon --workspace ~/daemon
-
-# 4. 另一个终端:提交任务
-poetry run epubctl --db ~/daemon/daemon.sqlite submit /path/to/book.epub \
-  --flags '{"ai_select": true, "no_review": true}' --priority 5
-
-# 5. 实时观察
+# 终端 2:提交任务、观察进度、跟踪日志
+poetry run epubctl submit ~/books/little-prince.epub \
+    --flags '{"ai_select": true, "no_review": true}' --priority 5
 poetry run epubctl status --watch
-
-# 6. 取消或查看
-poetry run epubctl cancel 1
 poetry run epubctl log 1 --follow
-poetry run epubctl show 1
 ```
 
-### 子命令一览
+任务进入 `SUCCESS` 后,EPUB 在 `~/epub-daemon/jobs/job_<id>/output.commented.epub` —— 拖进阅读器即可。
 
-| 命令 | 用途 |
-|---|---|
-| `submit <file>` | 提交 EPUB;`--priority N` / `--synopsis "..."` / `--flags-json '{...}'` / `--ai-select` / `--ai-review` |
-| `status [--status X]` | 按状态过滤的列表(默认全部) |
-| `watch [--interval S]` | 实时刷新 (Ctrl-C 退出) |
-| `show <id> [--meta]` | 详情(含 token / 章节 / 错误信息) |
-| `log <id> [--tail N] [--follow]` | tail job 的 `logs/*.log` |
-| `events <id> [--limit N]` | 生命周期事件时间线 |
-| `retry <id>` | FAILED → PENDING |
-| `cancel <id>` | 发信号给 worker,触发协作式取消 |
-| `resume <id>` | PAUSED → PENDING |
-| `priority <id> N` | 调整优先级 |
-| `pause-all` / `resume-all` | 批量切换 |
-| `health` | 队列深度 + 最近一次 server stat 采样 |
-| `recover` | 手动触发崩溃恢复(应该不需要) |
-| `prune [--success\|--failed] [--force]` | 删旧 jobs + workspace |
+配置(`format.daemon.json`)、每个 `epubctl` 子命令、每任务 workspace 布局、如何用 `systemd` 或容器部署,都见[完整守护进程指南](./docs/daemon_zh-CN.md)。
 
-### SQLite 路径解析
+---
 
-`epubctl` 按以下顺序查找 `daemon.sqlite`:
-
-1. `--db <path>` 参数
-2. `$EPUBCTL_DAEMON_DB` 环境变量
-3. 当前目录的 `daemon.sqlite`
-
-### 单实例保证
-
-daemon 启动时通过 `fcntl.flock` 抢占 `<workspace>/daemon.lock`(Windows 退化为 PID 文件)。第二次启动会被拒绝并直接退出,不会撞 SQLite。
-
-### 优雅停止
-
-发 `SIGTERM`(或 Ctrl-C)给 daemon 进程,worker 会在完成当前 chapter 之后退出。正在跑的 LLM 调用会触发 `comment_epub()` 内部的 `CommentAbortError` → `CANCELLED`,不丢进度。下次启动自动从崩溃恢复路径走一遍(`db.recover_crashed_jobs`)。
-
-### systemd 部署示例
-
-```ini
-# /etc/systemd/system/epub-commentor.service
-[Unit]
-Description=EPUB Commentor Daemon
-After=network-online.target
-
-[Service]
-Type=simple
-User=you
-WorkingDirectory=/home/you
-Environment="EPUB_COMMENTOR_API_KEY=sk-..."
-ExecStart=/home/you/.local/bin/python -m epub_commentor.daemon --workspace /home/you/daemon
-Restart=on-failure
-RestartSec=30
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now epub-commentor
-journalctl -u epub-commentor -f
-```
-
-> **提示**:`format.json` 与 `format.daemon.json` 是两份不同文件。前者给 `comment_epub()` 调用用(URL / model / token_encoding …);后者只给守护进程用(workspace / 阈值 / 间隔)。
-
-
+## 强制 JSON 输出
 
 Commentor 每次发给 LLM 的调用（章节概览、每个批次的评注）都期望拿回一个**合法 JSON object**。Prompt 里要求了 JSON、再加上 pydantic + 多轮 retry 兜底，可以清理绝大多数漏网之鱼——但你可以走更干脆的路：直接打开 API 级的 JSON 模式。
 

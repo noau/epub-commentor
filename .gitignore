@@ -218,3 +218,4 @@ epubs/
 logs/
 daemon-prd.md
 daemon-proposal.md
+.zread/

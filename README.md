@@ -51,6 +51,7 @@
   - [Recommended `format.json` for batch jobs](#recommended-formatjson-for-batch-jobs)
   - [CLI presets by scenario](#cli-presets-by-scenario)
   - [Output handling](#output-handling)
+- [Long-running daemon (`epubctl`)](#long-running-daemon-epubctl)
 - [Forcing JSON output](#forcing-json-output)
 - [Command reference](#command-reference)
 - [Reading the result on your device](#reading-the-result-on-your-device)
@@ -430,6 +431,47 @@ poetry run epub-commentor book.epub \
 - **JSON extras are flat top-level fields** — `stage`, `substage`, `current`, `total` are siblings of `message` and `level`, so `jq` selectors work without unwrapping. See [the JsonFormatter section](#json-output-mode) for the schema.
 - **Non-TTY auto-detect is opt-out-able** — pass `--stream-logs` to force the stream logger even on a TTY (useful when piping through `tee` and you want clean log lines on the file even with the bar on screen).
 - **`--quiet` truly silences everything** — even ERROR-level records. For ERROR-only visibility on a server, set `--log-level=ERROR` (don't use `--quiet`).
+
+---
+
+## Long-running daemon (`epubctl`)
+
+When you're annotating a stack of books on a server, the one-shot CLI
+forces you to babysit each run: SSH can drop, you can't peek at progress
+from another terminal, and disk pressure from LLM caches + logs can take
+the whole box down. `epub-commentor` ships with a small **local daemon**
+(`epubctl` + `python -m epub_commentor.daemon`) that gives you a SQLite-
+backed queue, a single in-process worker, and a CLI for inspecting
+everything — no HTTP, no auth, no extra processes.
+
+> **Full documentation lives in [`docs/daemon.md`](./docs/daemon.md)** —
+> it covers the architecture, every `epubctl` subcommand, the job state
+> machine, crash recovery, the disk circuit breaker, systemd + Docker
+> deployment, and troubleshooting. This section is just the
+> orientation.
+
+A typical workflow looks like:
+
+```bash
+# Terminal 1: start the daemon (blocks the foreground)
+mkdir -p ~/epub-daemon
+export EPUB_COMMENTOR_API_KEY=sk-...
+poetry run python -m epub_commentor.daemon --workspace ~/epub-daemon
+
+# Terminal 2: submit books, watch progress, tail logs
+poetry run epubctl submit ~/books/little-prince.epub \
+    --flags '{"ai_select": true, "no_review": true}' --priority 5
+poetry run epubctl status --watch
+poetry run epubctl log 1 --follow
+```
+
+When a job lands in `SUCCESS`, the EPUB is at
+`~/epub-daemon/jobs/job_<id>/output.commented.epub` — drag it onto your
+reader.
+
+Read [the full daemon guide](./docs/daemon.md) for setup, configuration
+(`format.daemon.json`), every `epubctl` subcommand, the per-job workspace
+layout, and how to deploy under `systemd` or in a container.
 
 ---
 
