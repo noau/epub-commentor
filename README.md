@@ -436,6 +436,11 @@ poetry run epub-commentor book.epub \
 
 ## Long-running daemon (`epubctl`)
 
+> **Setting up a fresh server?** See the [Deployment Guide](./docs/deployment.md)
+> first — a copy-pasteable walkthrough from a clean Ubuntu box to a
+> daemon running under systemd, ending with the first book finished and
+> a filesystem snapshot.
+
 When you're annotating a stack of books on a server, the one-shot CLI
 forces you to babysit each run: SSH can drop, you can't peek at progress
 from another terminal, and disk pressure from LLM caches + logs can take

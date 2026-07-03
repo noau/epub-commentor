@@ -437,6 +437,10 @@ poetry run epub-commentor book.epub \
 
 ## 常驻守护进程 (`epubctl`)
 
+> **第一次在一台全新服务器上部署?** 先看 [部署指南](./docs/deployment_zh-CN.md)
+> ——从一台干净的 Ubuntu 机器出发,可复制粘贴地走完 systemd 上线、第一本书
+> 评注完成的全流程,文末附最终文件系统快照。
+
 当你在服务器上批量评注一堆书时,一次性的 CLI 会逼着你守着每一轮:SSH 断了就完、看不到进度、磁盘会被 LLM 缓存+日志撑爆。`epub-commentor` 自带一个**本地守护进程**(`epubctl` + `python -m epub_commentor.daemon`)——基于 SQLite 的队列 + 单进程 worker + 本地 CLI 客户端,无 HTTP、无鉴权、无额外进程。
 
 > **完整文档在 [`docs/daemon_zh-CN.md`](./docs/daemon_zh-CN.md)**——架构、所有 `epubctl` 子命令、任务状态机、崩溃恢复、磁盘熔断、systemd + Docker 部署、故障排查都在里面。本节只做导览。

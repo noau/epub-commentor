@@ -10,6 +10,11 @@ from a local CLI client. No HTTP, no auth, no extra processes — just an SQLite
 file, a workspace directory, and one Python thread.
 
 > Looking for the single-file CLI instead? See the [top-level README](../README.md).
+>
+> **Setting up a fresh Ubuntu / Linux server for the first time?** Skip to
+> the [Deployment Guide](./deployment.md) — a complete, copy-pasteable
+> walkthrough from "empty box" to "first book finished", with a final
+> filesystem snapshot. This document is the behaviour reference.
 
 ---
 
