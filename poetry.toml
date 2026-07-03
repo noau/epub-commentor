@@ -1,3 +1,0 @@
-[plugins]
-[plugins.pypi_mirror]
-url = "https://mirrors.cloud.tencent.com/pypi/simple/"

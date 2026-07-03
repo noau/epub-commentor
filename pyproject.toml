@@ -34,10 +34,12 @@ dependencies = [
     "pydantic>=2.5,<3.0",
     "rich>=13.0.0,<15.0.0",
     "rich-selector @ git+https://github.com/noau/rich-selector.git@v0.1.0",
+    # "rich-selector @ file://path/rich-selector",
 ]
 
 [project.scripts]
 epub-commentor = "epub_commentor.cli:main"
+epubctl = "epub_commentor.ctl:main"
 
 [project.urls]
 Homepage = "https://github.com/noau/epub-commentor"
@@ -56,6 +58,11 @@ packages = [
 ruff = "^0.14.10"
 pytest = "^9.0.2"
 pyright = "^1.1.407"
+
+[[tool.poetry.source]]
+name = "mirrors"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
+priority = "primary"
 
 [tool.ruff]
 line-length = 120
