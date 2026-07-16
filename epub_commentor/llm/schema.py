@@ -236,10 +236,81 @@ def validate_block_annotations(ann: BlockAnnotation, block_size: int) -> list[Co
     return ann.comments
 
 
+class ParagraphTranslation(BaseModel):
+    """Stage 3 output: the translated text of one paragraph.
+
+    ``p_id`` is the **block-local** paragraph index inside the chunk the
+    LLM was shown (``data-p-id="0..N"`` markers), so it always falls
+    inside ``[0, len(block_ps))``; ``translate_chapters`` shifts it
+    by the block offset to produce the absolute paragraph index used by
+    ``inject_chapter`` for DOM insertion.
+
+    ``text`` is the translated version of the original paragraph. The
+    original is preserved untouched in the DOM — translation is purely
+    additive. ``\n`` inside ``text`` is rendered as ``<br/>`` so that
+    internal line breaks map 1:1 across the language boundary.
+    """
+
+    p_id: int = Field(..., ge=0)
+    # ``min_length=0`` (not 1): a paragraph can be pure structural markup
+    # (a header image, an empty wrapper the original book left behind) and
+    # the prompt instructs the translator to emit an empty string in that
+    # case rather than dropping the entry — otherwise the downstream
+    # 1:1 paragraph alignment would silently drift on those books.
+    text: str = Field(..., min_length=0, max_length=8000)
+
+
+class BlockTranslation(BaseModel):
+    """Stage 3 output: all translated paragraphs for a single block.
+
+    Mirrors :class:`BlockAnnotation` for the translation stage. May be
+    empty if the LLM returned an empty ``translations`` list (a legal
+    "no translation produced" response — we just don't inject anything).
+    """
+
+    translations: list[ParagraphTranslation] = Field(default_factory=list)
+
+
+def validate_block_translations(
+    bt: BlockTranslation,
+    block_size: int,
+) -> list[ParagraphTranslation]:
+    """Validate Stage 3 output against block boundaries and uniqueness.
+
+    Rules enforced (in order):
+
+    1. Every ``p_id`` value is in ``[0, block_size)``.
+    2. ``p_id`` values are **unique within the block** — every paragraph
+       is independently translated, so two entries targeting the same
+       source would mean an LLM double-output (we refuse rather than
+       silently drop the second, because dropping silently produces
+       silent partial translations). Operators who want partial
+       coverage can author blocks with fewer entries explicitly.
+
+    Unlike :func:`validate_block_annotations`, there is no contiguity
+    or overlap rule — paragraphs are translation units, not anchors.
+    Returns ``bt.translations`` on success for caller chaining.
+    """
+    seen: set[int] = set()
+    for tr in bt.translations:
+        if tr.p_id < 0 or tr.p_id >= block_size:
+            raise _errors.CommentOrphanPIdError(
+                f"translation references out-of-range p_id {tr.p_id} "
+                f"(block_size={block_size})"
+            )
+        if tr.p_id in seen:
+            raise _errors.CommentOverlapError(
+                f"p_id {tr.p_id} is translated more than once in the same block"
+            )
+        seen.add(tr.p_id)
+    return bt.translations
+
+
 __all__ = [
     "AnnotationSelection",
     "AnnotationSelectionBatch",
     "BlockAnnotation",
+    "BlockTranslation",
     "ChapterMemo",
     "ChapterSelection",
     "ChapterSelectionBatch",
@@ -249,5 +320,7 @@ __all__ = [
     "CommentOverlapError",
     "CommentPosition",
     "KeyTerm",
+    "ParagraphTranslation",
     "validate_block_annotations",
+    "validate_block_translations",
 ]

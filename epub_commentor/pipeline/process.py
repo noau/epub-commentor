@@ -24,11 +24,14 @@ from ..errors import (
     CommentInvalidJSONError,
     CommentNoParagraphsError,
     CommentScanFailedError,
+    CommentTranslationFailedError,
+    CommentTranslationInvalidJSONError,
 )
 from ..llm.block import annotate_block
 from ..llm.memo import scan_chapter
 from ..llm.protocol import LLMProtocol
 from ..llm.schema import ChapterMemo, CommentItem
+from ..llm.translate import translate_block
 from ..progress import ProgressCallback, ProgressEvent
 from .extract import Chapter
 
@@ -68,6 +71,14 @@ class ChapterAnnotation:
     review gate so the user can decide whether to inject the chapter or
     regenerate it. Both default to 0 for chapters that bypassed Stage 2
     entirely (zero ``<p>``, scan failure).
+
+    ``translations`` and ``translation_blocks_skipped`` are populated by
+    :func:`translate_chapters` (Stage 3) when ``config.enable_translation``
+    is ``True``. ``translations`` is sorted by absolute ``p_id`` so the
+    injection layer can walk it in order; ``translation_blocks_skipped``
+    mirrors ``skipped_blocks`` for the Stage 3 soft-skip policy. When
+    Stage 3 is disabled both default to ``[]`` / ``0`` — injection is a
+    no-op for them.
     """
 
     chapter: Chapter
@@ -75,6 +86,8 @@ class ChapterAnnotation:
     comments: list[CommentItem] = field(default_factory=list)
     skipped_blocks: int = 0
     has_empty_blocks: int = 0
+    translations: list = field(default_factory=list)
+    translation_blocks_skipped: int = 0
 
 
 def _empty_memo() -> ChapterMemo:
@@ -315,6 +328,165 @@ def _process_chapter(
     return annotation, blocks_skipped
 
 
+def _is_chapter_skipped(annotation: ChapterAnnotation) -> bool:
+    """True if Stage 1 produced the placeholder memo (zero ``<p>`` / scan failure).
+
+    Mirrors the ``(chapter skipped`` prefix used by the CLI summary panel
+    so :func:`translate_chapters` can skip the same chapters the
+    downstream ``chapters_skipped`` counter would skip. Returning ``True``
+    means this chapter has nothing to translate (its body has zero
+    paragraphs, by construction).
+    """
+    return annotation.memo.core_thesis.startswith("(chapter skipped")
+
+
+def translate_chapters(
+    annotations: list[ChapterAnnotation],
+    llm: LLMProtocol,
+    config: CommentConfig,
+    progress_callback: ProgressCallback | None = None,
+) -> int:
+    """Stage 3 — translate every paragraph in every chapter's body.
+
+    Runs AFTER Stage 2 + the annotation review gate so dropped chapters
+    never reach translation. Per-chapter translation uses the same
+    :func:`_split_blocks` block size as Stage 2; the same
+    :class:`ThreadPoolExecutor` concurrency, rate-limiter and cache-seed
+    machinery is reused via :func:`epub_commentor.llm.translate.translate_block`.
+
+    Translation failures follow the same dual policy Stage 2 uses:
+
+    - ``config.fail_on_translation_error=True`` raises
+      :class:`~epub_commentor.errors.CommentTranslationFailedError`
+      from the offending block.
+    - default (``False``) logs a warning, drops the failed block,
+      and increments ``ChapterAnnotation.translation_blocks_skipped``;
+      the rest of the chapter's translations still get injected.
+
+    Returns ``total_translation_blocks_skipped`` — the aggregate count
+    of Stage 3 blocks that were skipped. The caller
+    (:func:`epub_commentor.commentor.comment_epub`) populates
+    :attr:`CommentorResult.translation_blocks_skipped` from this.
+
+    The translation language is always :attr:`CommentConfig.target_language`
+    so commentary and translation stay in lockstep.
+    """
+    if not config.enable_translation:
+        return 0
+
+    chapter_count = len(annotations)
+    processing = 0
+    total_skipped = 0
+    fail_block_error = getattr(config, "fail_on_translation_error", False)
+
+    for annotation in annotations:
+        processing += 1
+        chapter = annotation.chapter
+        title = chapter.title
+
+        # Skip-chapter cascade: zero-paragraph chapters, Stage 1 scan
+        # failures, and chapters already soft-skipped via
+        # ``skip_chapter_on_empty_annotation`` all carry the placeholder
+        # memo and have nothing to translate.
+        paragraphs = list(chapter.body.iter("p"))
+        if not paragraphs or _is_chapter_skipped(annotation):
+            continue
+
+        blocks = _split_blocks(chapter, config.block_size)
+        chapter_hash = _chapter_hash(chapter.path)
+        block_count = len(blocks)
+        processed_block = 0
+
+        _emit(
+            progress_callback,
+            ProgressEvent(
+                stage="process",
+                substage="translate",
+                current=processing,
+                total=chapter_count,
+                message=title,
+            ),
+        )
+        _emit(
+            progress_callback,
+            ProgressEvent(
+                stage="process",
+                substage="translate",
+                current=0,
+                total=max(block_count, 1),
+            ),
+        )
+
+        translations: list = []
+        skipped = 0
+
+        if not blocks:
+            annotation.translations = translations
+            annotation.translation_blocks_skipped = skipped
+            total_skipped += skipped
+            continue
+
+        with ThreadPoolExecutor(max_workers=config.concurrency) as executor:
+            futures = {
+                executor.submit(
+                    translate_block,
+                    block_ps=block_ps,
+                    block_start_idx=start_idx,
+                    chapter_hash=chapter_hash,
+                    llm=llm,
+                    config=config,
+                ): start_idx
+                for start_idx, block_ps in blocks
+            }
+            for future in as_completed(futures):
+                block_start = futures[future]
+                try:
+                    block_translations = future.result()
+                except CommentAbortError:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise
+                except CommentTranslationInvalidJSONError as exc:
+                    msg = (
+                        f"Stage 3 translate failed for block starting at p_id {block_start} "
+                        f"in {chapter.path.as_posix()} after retries "
+                        f"({type(exc).__name__}: {exc}) "
+                        f"(fail_on_translation_error={fail_block_error})"
+                    )
+                    if fail_block_error:
+                        _logger.error(msg)
+                        raise CommentTranslationFailedError(
+                            f"Stage 3 translation failed: {exc}"
+                        ) from exc
+                    _logger.warning(msg)
+                    skipped += 1
+                    block_translations = []
+
+                # Shift block-local p_ids to absolute paragraph indices
+                # so inject_chapter can map them via body.iter("p") directly.
+                for tr in block_translations:
+                    tr.p_id = tr.p_id + block_start
+                translations.extend(block_translations)
+
+                processed_block += 1
+                _emit(
+                    progress_callback,
+                    ProgressEvent(
+                        stage="process",
+                        substage="translate",
+                        current=processed_block,
+                        total=block_count,
+                    ),
+                )
+
+        # Sort by absolute p_id so the injection layer can walk in order.
+        translations.sort(key=lambda tr: tr.p_id)
+        annotation.translations = translations
+        annotation.translation_blocks_skipped = skipped
+        total_skipped += skipped
+
+    return total_skipped
+
+
 def process_chapters(
     chapters: list[Chapter],
     book_metadata: dict[str, str],
@@ -371,4 +543,4 @@ def process_chapters(
     return annotations, blocks_skipped_total
 
 
-__all__ = ["AnnotationFilter", "ChapterAnnotation", "process_chapters"]
+__all__ = ["AnnotationFilter", "ChapterAnnotation", "process_chapters", "translate_chapters"]

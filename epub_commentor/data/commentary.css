@@ -60,6 +60,31 @@
   border-left: 5px double #333;
 }
 
+
+/* TRANSLATION (Stage 3, opt-in via --enable-translation) — every
+ * paragraph receives a sibling <p class="translation"> immediately
+ * after it that contains the LLM-authorized translation into the
+ * --target-language. Intentionally **no visual chrome** here:
+ *   - no border-left rule (would clash with the .commentary asides
+ *     that surround it on the same paragraph);
+ *   - no italic, no color shift, no background (e-ink friendliness
+ *     — diagonals and color shifts are harder to read across a long
+ *     pass);
+ *   - no left-margin offset (would mimic an <aside> and visually
+ *     suggest "this is editorial, not part of the prose").
+ *
+ * The translation is distinguished from the original only by:
+ *   - its class="translation" attribute (CSS selectors + JS hooks),
+ *   - an optional lang="…" attribute set at injection time so AT /
+ *     TTS engines can switch voices.
+ *
+ * If a future user wants visual differentiation (italic, indent,
+ * border), add it behind a new flag -- never here unconditionally:
+ * the default is "the reader should barely notice the translation
+ * exists while reading the original".
+ */
+.translation { /* intentionally none — styled by surrounding <p>. */ }
+
 /* Reserved for future transitions; the rule of thumb recorded here is
  * "prefer whitespace over decoration" — long asides with motion become
  * tiring on e-ink. Empty block by design.

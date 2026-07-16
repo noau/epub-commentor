@@ -220,6 +220,14 @@ class RichProgressDisplay:
         if event.stage != "process":
             return
 
+        # The "select" substage fires *before* the progress bar should
+        # exist — the interactive chapter-filter (rich-selector) needs
+        # full terminal control with no Rich rendering thread alive.
+        # Stream-log consumers still see the event pair; only the TTY
+        # bar stays dormant until the first "scan" event.
+        if event.substage == "select":
+            return
+
         self._ensure_started()
         progress = self._progress
         chapter_task = self._chapter_task

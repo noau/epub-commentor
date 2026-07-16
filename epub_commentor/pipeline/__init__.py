@@ -20,7 +20,7 @@ from .inject import (
     inject_css_zip,
     inject_opf,
 )
-from .process import AnnotationFilter, ChapterAnnotation, process_chapters
+from .process import AnnotationFilter, ChapterAnnotation, process_chapters, translate_chapters
 
 __all__ = [
     "AnnotationFilter",
@@ -35,4 +35,5 @@ __all__ = [
     "inject_css_zip",
     "inject_opf",
     "process_chapters",
+    "translate_chapters",
 ]

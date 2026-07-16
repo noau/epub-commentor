@@ -150,18 +150,15 @@ def inject_comment(
     once per chapter via :func:`_build_parent_map` and shared across all
     comments in that chapter). The caller is responsible for handing in a
     stable id (used for the DOM ``id="cmt-..."`` attribute).
+
+    The aside is spliced as a sibling of ``target_p`` inside its immediate
+    parent — no body-direct-ancestor walk. This ensures comments stay next
+    to their target paragraph regardless of wrapper structure (e.g. a
+    chapter-wide ``<div>`` no longer funnels all comments to the top/bottom).
     """
-    anchor = _find_body_direct_ancestor(target_p, body, parent_map)
     aside = _make_aside_simple(kind, content, cmt_id)
-
-    if anchor is body:
-        # Degenerate case: the body has no children, or the target is
-        # somehow the body itself. Append the aside as a direct body child.
-        body.append(aside)
-        return
-
-    parent = parent_map.get(anchor, body)
-    insert_at = list(parent).index(anchor)
+    parent = parent_map.get(target_p, body)
+    insert_at = list(parent).index(target_p)
     if position is CommentPosition.AFTER:
         insert_at += 1
     parent.insert(insert_at, aside)
@@ -178,6 +175,22 @@ def inject_chapter(
     paragraph index produced by :mod:`epub_commentor.pipeline.process`.
     Callers may pass a ``parent_map_holder`` to amortise the O(N) parent
     map build across the whole chapter loop (keyed on ``id(body)``).
+
+    When Stage 3 (translation) is enabled, the same pass also splices
+    one ``<p class="translation" lang="{target_language}">`` per
+    :class:`~epub_commentor.llm.schema.ParagraphTranslation`, immediately
+    AFTER the original paragraph. The insertion is interleaved with the
+    comment splice (NOT a separate post-pass) so:
+
+    - the chapter body mutates once, then ``xml_node.save`` writes it
+      back exactly once (no "二次 mutate" risk);
+    - the existing ``parent_map`` is reused for both asides and
+      translations (an aside insertion does not invalidate the parent
+      chain because ``inject_comment`` uses Element-identity anchors);
+    - the ``paragraphs`` snapshot stays valid across both passes since
+      aside insertions create ``<aside>`` siblings (not ``<p>``), and
+      translation ``<p>`` siblings are added at ``index(target_p)+1``
+      so they never appear ahead of subsequent targets.
     """
     body = annotation.chapter.body
     paragraphs = list(body.iter(_PARAGRAPH_TAG))
@@ -210,6 +223,22 @@ def inject_chapter(
             cmt_id=cmt_id,
             parent_map=parent_map,
         )
+
+    # ---- Stage 3 (translation) splice ----
+    # Insert one <p class="translation"> per ParagraphTranslation, ALWAYS AFTER
+    # the source paragraph. Walk high -> low p_id so the high-p_id translation
+    # lands first and earlier inserts never shift later target Element references.
+    # ``annotation.translations`` is empty when Stage 3 is disabled, in which
+    # case the entire block is a zero-cost no-op.
+    if annotation.translations:
+        for tr in sorted(annotation.translations, key=lambda x: x.p_id, reverse=True):
+            if tr.p_id < 0 or tr.p_id >= len(paragraphs):
+                continue
+            target_p = paragraphs[tr.p_id]
+            translation_p = Element(_PARAGRAPH_TAG, {"class": "translation"})
+            translation_p.text = tr.text
+            parent = parent_map.get(target_p, body)
+            parent.insert(list(parent).index(target_p) + 1, translation_p)
 
     # Defensive strip of any leftover marker. M2's annotate_block already
     # strips its own, but extra passes (M5 mock runs, manual test rigs)

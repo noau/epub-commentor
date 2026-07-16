@@ -204,7 +204,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--target-language",
         type=str,
         default=None,
-        help="Language the LLM should author commentary in (default: Chinese).",
+        help=(
+            "Language the LLM should author commentary in (Stage 2) and, "
+            "when --enable-translation is set, translate every paragraph "
+            "into (Stage 3). Default: Chinese."
+        ),
+    )
+    parser.add_argument(
+        "--enable-translation",
+        action="store_true",
+        help=(
+            "Optional Stage 3: after Stage 2 (annotation generation), "
+            "translate every paragraph in every chapter into the language "
+            "specified by --target-language and insert the translation "
+            "right after the original paragraph in the DOM. Off by default. "
+            "The original text is never modified — translation is purely "
+            "additive. Same concurrency / cache / RPM / TPM knobs as the "
+            "commentary stages; set fail_on_translation_error=true in "
+            "format.json for strict mode."
+        ),
     )
     parser.add_argument(
         "--css-path",
@@ -487,6 +505,8 @@ def _build_config(args: argparse.Namespace, base: dict | None = None) -> Comment
         overrides["fail_on_block_error"] = True
     if args.skip_chapter_on_empty_annotation:
         overrides["skip_chapter_on_empty_annotation"] = True
+    if args.enable_translation:
+        overrides["enable_translation"] = True
 
     cfg = CommentConfig(**overrides)
 
@@ -527,7 +547,7 @@ def _build_chapter_filter(args: argparse.Namespace) -> ChapterFilter | None:
         SelectionCancelled,
     )
 
-    def _filter(chapters: list[Chapter]) -> list[bool]:
+    def _filter(chapters: list[Chapter], _prompt_metadata: dict[str, str]) -> list[bool]:
         # Pre-deselect empty chapters so a user can move to `[ Confirm ]` and
         # press Enter to skip them all at once. The library's own _process_chapter
         # still guards against them defensively in case a callback ever drops
@@ -730,7 +750,7 @@ def _build_annotation_filter(args: argparse.Namespace) -> AnnotationFilter | Non
 
     smart_trigger = not getattr(args, "review", False)
 
-    def _filter(annotations: list[ChapterAnnotation]) -> list[bool]:
+    def _filter(annotations: list[ChapterAnnotation], _prompt_metadata: dict[str, str]) -> list[bool]:
         # Lazy import keeps the public ``epub_commentor`` cli import-clean
         # for users that never pass --review or --no-review. ``Choice`` is
         # only used by ``_make_review_choice`` (which imports it locally);

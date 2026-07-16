@@ -27,6 +27,7 @@
   - **Intro** — a 1–3 sentence lead-in placed *before* a passage, so you know what's coming.
   - **Summary** — a 1–3 sentence wrap-up placed *after* a passage, tying it together.
   - **Note** — a brief gloss on a specific term or idea.
+- **Optional paragraph translation** — with `--enable-translation`, each original paragraph is followed by a same-language rendering so the commentary and the text share a single reading language. Off by default; the original text is never modified.
 - **Commentary in any language you choose** — read an English book with Chinese notes, or vice-versa.
 - **E-ink friendly styling** — greyscale, no color or shadow, and notes never split across a page break.
 - **A ready-to-read `.epub`** written next to your source file. Nothing to convert afterward — drag it onto your reader.
@@ -274,6 +275,7 @@ You control the notes through a handful of flags. All are optional.
 - **`--synopsis "..."`** — a one-line description of the book to steer the tone.
 - **`--block-size 6`** — how many paragraphs the model looks at per batch. Smaller = more granular, finer notes but more API calls (higher cost); larger = broader notes, cheaper. Default: `6`.
 - **`--concurrency 4`** — how many batches within a chapter are processed at once. Higher finishes faster but hits your API's rate limits harder. Default: `4`.
+- **`--enable-translation`** — (optional) after Stage 2, translate every paragraph into the language specified by `--target-language`. The original is unchanged; each translated paragraph is inserted as `<p class="translation">` right after the source. Same concurrency / cache / rate-limit knobs apply.
 - **`--no-css`** — inject only the note blocks, without the built-in styling (advanced; use if you'll supply your own stylesheet).
 
 ---
@@ -516,7 +518,8 @@ Run `poetry run epub-commentor --help` any time for the authoritative list. Ever
 | `-o`, `--output PATH` | Where to write the result. Default: `<name>.commented.epub` next to the source. |
 | `--format-json PATH` | Where to read credentials from. Default: `format.json` next to the source, then the current folder. |
 | `--synopsis TEXT` | One-line book description to steer tone. |
-| `--target-language LANG` | Language for the commentary. Default: `Chinese`. |
+| `--target-language LANG` | Language for commentary (Stage 2) and, when `--enable-translation` is on, paragraph translation (Stage 3). Default: `Chinese`. |
+| `--enable-translation` | Opt into Stage 3 paragraph translation. See [Tuning the commentary](#tuning-the-commentary). |
 | `--block-size N` | Paragraphs per batch. Default: `6`. |
 | `--concurrency N` | Batches processed at once within a chapter. Default: `4`. |
 | `--max-json-retries N` | Retries when the model returns malformed notes for a batch. Default: `3`. |
@@ -621,9 +624,12 @@ result = comment_epub(
     config=config,
 )
 
-print(f"chapters annotated: {result.chapters_processed}")
-print(f"comments generated: {result.total_comments}")
-print(f"tokens used:        {result.total_tokens}")
+print(f"chapters annotated:     {result.chapters_processed}")
+print(f"comments generated:     {result.total_comments}")
+print(f"tokens used:            {result.total_tokens}")
+if result.paragraphs_translated:
+    print(f"paragraphs translated:  {result.paragraphs_translated}")
+    print(f"chapters translated:    {result.chapters_translated}")
 ```
 
 ### Watching progress
@@ -675,6 +681,9 @@ comment_epub(source="book.epub", llm=llm, config=config, chapter_filter=only_rea
 | `inject_css` | `True` | Whether to add the built-in stylesheet. |
 | `css_path_in_epub` | `Styles/commentary.css` | Where the stylesheet lands inside the EPUB. |
 | `fail_on_empty_chapter` | `False` | Error (instead of skip) on a chapter with no paragraphs. |
+| `enable_translation` | `False` | Opt into optional Stage 3 paragraph translation. |
+| `max_translation_retries` | `3` | Retries on malformed translation JSON. |
+| `fail_on_translation_error` | `False` | Error (instead of soft-skip) when a translation block fails. |
 | `cache_seed_user_id` | `"default"` | Cache namespace; change to force fresh results. |
 
 `comment_epub` raises a `CommentorError` if a chapter can't be annotated after all retries — catch it if you want to handle failures gracefully:
@@ -693,7 +702,7 @@ except CommentorError as exc:
 ## FAQ
 
 **Does it change or translate my book?**
-No. The original text is preserved exactly. Commentor only *adds* note blocks beside it. `--target-language` controls the language of those added notes, not the book.
+No — not by default. With `--enable-translation`, each paragraph gets a translated copy placed *after* the original (both the original and the translation appear on the page). Without that flag (the default), the original text is preserved exactly and Commentor only *adds* note blocks beside it. `--target-language` controls the language of all added content — commentary and, when enabled, translation.
 
 **Can I read the result on a Kindle?**
 Yes — see [Reading the result on your device](#reading-the-result-on-your-device). The output is a plain EPUB that modern Kindles and every other reader accept.

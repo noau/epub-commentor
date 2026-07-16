@@ -33,6 +33,7 @@ from .pipeline import (
     extract_chapters,
     inject_annotations,
     process_chapters,
+    translate_chapters,
 )
 from .progress import ProgressCallback, ProgressEvent
 
@@ -119,6 +120,15 @@ class CommentorResult:
     chapters_skipped: int = 0
     chapters_filtered: int = 0
     blocks_skipped: int = 0
+    # ---- Stage 3 (translation) counters ----
+    # Populated only when ``config.enable_translation=True`` (see
+    # ``comment_epub``); default 0 when Stage 3 was disabled.
+    paragraphs_translated: int = 0
+    """Total paragraph translations actually inserted across all chapters."""
+    chapters_translated: int = 0
+    """Chapters that produced at least one translated paragraph."""
+    translation_blocks_skipped: int = 0
+    """Stage 3 blocks dropped after retry exhaustion (soft-skip policy)."""
     total_tokens: int = 0
     input_tokens: int = 0
     input_cache_tokens: int = 0
@@ -410,6 +420,48 @@ def comment_epub(
             ai_review_decisions = _AI_DECISION_SINKS["review"] or None
             _AI_DECISION_SINKS["review"] = {}
 
+            # ---- Optional Stage 3 (translation) ----
+            # Runs AFTER the annotation review gate so dropped chapters never
+            # reach translation. Translation results are stored on each
+            # ``ChapterAnnotation.translations``; the DOM splice happens
+            # inside ``inject_annotations -> inject_chapter`` in a single
+            # pass, so no second ``xml_node.save`` is needed.
+            translation_blocks_skipped = 0
+            paragraphs_translated = 0
+            chapters_translated = 0
+            if cfg.enable_translation:
+                _emit_progress(
+                    progress_callback,
+                    ProgressEvent(
+                        stage="process",
+                        substage="translate",
+                        current=0,
+                        total=max(len(filtered_annotations), 1),
+                    ),
+                )
+                translation_blocks_skipped = translate_chapters(
+                    annotations=filtered_annotations,
+                    llm=llm,
+                    config=cfg,
+                    progress_callback=progress_callback,
+                )
+                paragraphs_translated = sum(len(a.translations) for a in filtered_annotations)
+                chapters_translated = sum(1 for a in filtered_annotations if a.translations)
+                _emit_progress(
+                    progress_callback,
+                    ProgressEvent(
+                        stage="process",
+                        substage="translate",
+                        current=max(len(filtered_annotations), 1),
+                        total=max(len(filtered_annotations), 1),
+                    ),
+                )
+                _logger.info(
+                    "Translation complete: %d paragraph(s) across %d chapter(s).",
+                    paragraphs_translated,
+                    chapters_translated,
+                )
+
             _logger.info("Injecting annotations...")
             inject_annotations(zip=z, annotations=filtered_annotations, config=cfg, book_metadata=book_metadata)
             _logger.info("Injection complete.")
@@ -435,6 +487,9 @@ def comment_epub(
             chapters_skipped=chapters_skipped,
             chapters_filtered=chapters_filtered,
             blocks_skipped=blocks_skipped,
+            paragraphs_translated=paragraphs_translated,
+            chapters_translated=chapters_translated,
+            translation_blocks_skipped=translation_blocks_skipped,
             total_tokens=total_tokens,
             input_tokens=input_tokens,
             input_cache_tokens=input_cache_tokens,

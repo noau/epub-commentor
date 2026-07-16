@@ -42,6 +42,7 @@ from epub_commentor.template import create_env
 # cached ``review`` response — different seeds, different stages.
 _SCAN_PREFIX = ":scan:"
 _ANNOTATE_PREFIX = ":annotate:"
+_TRANSLATE_PREFIX = ":translate:"
 _SELECT_PREFIX = ":select:"
 _REVIEW_PREFIX = ":review:"
 
@@ -204,6 +205,7 @@ class MockLLM:
             stage_keys = {
                 _SCAN_PREFIX: "scan__response",
                 _ANNOTATE_PREFIX: "annotate__response",
+                _TRANSLATE_PREFIX: "translate__response",
                 _SELECT_PREFIX: "select__response",
                 _REVIEW_PREFIX: "review__response",
             }
@@ -229,6 +231,15 @@ class MockLLM:
     def annotate_seed(config_user_id: str, chapter_hash: str, block_hash: str) -> str:
         """Reconstruct the cache seed a real Stage 2 would use."""
         return f"commentor::annotate:{config_user_id}:{chapter_hash}::{block_hash}"
+
+    @staticmethod
+    def translate_seed(config_user_id: str, chapter_hash: str, block_hash: str) -> str:
+        """Reconstruct the cache seed a real Stage 3 would use.
+
+        Mirrors :meth:`annotate_seed` so tests can register per-block
+        canned translations without computing the block hash by hand.
+        """
+        return f"commentor::translate:{config_user_id}:{chapter_hash}::{block_hash}"
 
     @staticmethod
     def select_seed(config_user_id: str, book_hash: str) -> str:

@@ -27,6 +27,7 @@
   - **导读（intro）** — 1–3 句的开场白，放在段落*之前*，让你对接下来的内容先有预期。
   - **总结（summary）** — 1–3 句的收尾，放在段落*之后*，把这段内容串起来。
   - **夹注（note）** — 针对某个具体词句或概念的简短说明。
+- **可选的段落翻译** — 加 `--enable-translation` 后，每个原文段后面会跟上同语言的译文，让评注与正文保持统一的阅读语言。默认关闭；原文始终不改。
 - **评注语言任你选** — 读英文书配中文注，或反过来都行。
 - **专为墨水屏优化的样式** — 灰度、无彩色无阴影，评注块换页时不会被拆开。
 - **一份可直接阅读的 `.epub`**，就写在源文件旁边。无需任何后处理——拖进阅读器即可。
@@ -275,6 +276,7 @@ poetry run epub-commentor "book.epub" --synopsis "..." -i
 - **`--synopsis "..."`** — 一句话书籍简介，用来定调。
 - **`--block-size 6`** — 模型每批看多少个段落。越小越细致（注更多但 API 调用更多、更贵）；越大越概括、越省。默认 `6`。
 - **`--concurrency 4`** — 一个章节内同时处理几个批次。越高跑得越快，但更容易撞上 API 的速率限制。默认 `4`。
+- **`--enable-translation`** — （可选）在 Stage 2 完成后，将每个段落翻译为 `--target-language` 指定的语言。原文不变；译文以 `<p class="translation">` 形式紧跟在源段之后插入。共享同一批并发 / 缓存 / 限流参数。
 - **`--no-css`** — 只注入评注块，不带内置样式（进阶用法；当你要自备样式表时用）。
 
 ---
@@ -502,7 +504,8 @@ OpenAI、DeepSeek 以及大多数 OpenAI 兼容服务都支持一个参数，让
 | `-o`, `--output PATH` | 输出位置。默认：源文件旁的 `<名字>.commented.epub`。 |
 | `--format-json PATH` | 从哪里读凭据。默认：源文件旁的 `format.json`，其次当前目录。 |
 | `--synopsis TEXT` | 一句话书籍简介，用于定调。 |
-| `--target-language LANG` | 评注使用的语言。默认 `Chinese`。 |
+| `--target-language LANG` | 评注（Stage 2）和翻译（Stage 3，需 `--enable-translation`）使用的语言。默认 `Chinese`。 |
+| `--enable-translation` | 开启 Stage 3 段落翻译。详见[调整评注效果](#调整评注效果)。 |
 | `--block-size N` | 每批段落数。默认 `6`。 |
 | `--concurrency N` | 章节内同时处理的批次数。默认 `4`。 |
 | `--max-json-retries N` | 某批评注格式错误时的重试次数。默认 `3`。 |
@@ -607,9 +610,12 @@ result = comment_epub(
     config=config,
 )
 
-print(f"已评注章节: {result.chapters_processed}")
-print(f"生成评注数: {result.total_comments}")
-print(f"消耗 token: {result.total_tokens}")
+print(f"已评注章节:     {result.chapters_processed}")
+print(f"生成评注数:     {result.total_comments}")
+print(f"消耗 token:     {result.total_tokens}")
+if result.paragraphs_translated:
+    print(f"翻译段落数:     {result.paragraphs_translated}")
+    print(f"翻译章节数:     {result.chapters_translated}")
 ```
 
 ### 观察进度
@@ -661,6 +667,9 @@ comment_epub(source="book.epub", llm=llm, config=config, chapter_filter=only_rea
 | `inject_css` | `True` | 是否加入内置样式表。 |
 | `css_path_in_epub` | `Styles/commentary.css` | 样式表在 EPUB 内的位置。 |
 | `fail_on_empty_chapter` | `False` | 遇到无段落章节时报错（而非跳过）。 |
+| `enable_translation` | `False` | 开启可选 Stage 3 段落翻译。 |
+| `max_translation_retries` | `3` | 翻译 JSON 格式错误时的重试次数。 |
+| `fail_on_translation_error` | `False` | 翻译块失败时报错（而非软跳过）。 |
 | `cache_seed_user_id` | `"default"` | 缓存命名空间；改它可强制重新生成。 |
 
 若某章重试穷尽仍无法评注，`comment_epub` 会抛出 `CommentorError`——如果想优雅处理失败，捕获它即可：
@@ -679,7 +688,7 @@ except CommentorError as exc:
 ## 常见问题
 
 **它会改动或翻译我的书吗？**
-不会。原文一字不差地保留，Commentor 只在旁边*新增*评注块。`--target-language` 控制的是这些新增评注的语言，不是书本身。
+默认不会。加上 `--enable-translation` 后，每个段落会多一份译文副本*紧跟在原文之后*（原文与译文同时出现在页面上）。不加此旗标（默认行为）时，原文一字不差地保留，Commentor 只在旁边*新增*评注块。`--target-language` 控制所有新增内容（评注 + 翻译）的语言。
 
 **结果能在 Kindle 上读吗？**
 能——见[在你的设备上阅读](#在你的设备上阅读)。输出是普通 EPUB，新版 Kindle 及所有其他阅读器都能接受。

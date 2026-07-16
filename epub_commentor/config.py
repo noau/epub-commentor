@@ -64,6 +64,26 @@ class CommentConfig:
     """Independent retry budget for the ``--ai-select`` LLM call."""
     ai_review_max_retries: int = 3
     """Independent retry budget for the ``--ai-review`` LLM call."""
+    enable_translation: bool = False
+    """When ``True``, run Stage 3 (per-block paragraph translation) after
+    Stage 2 + the annotation review gate. Translation language is taken
+    from :attr:`target_language` so commentary and translation stay in
+    lockstep — there is no separate ``translation_target_language`` knob
+    to keep the CLI surface lean. Off by default; original text is
+    preserved untouched, translations are inserted as ``<p class="translation">``
+    right after each source paragraph."""
+    max_translation_retries: int = 3
+    """Independent retry budget for the Stage 3 LLM call. Mirrors
+    :attr:`max_json_retries` / :attr:`max_scan_retries` so a flaky
+    translation provider can be tuned without touching Stage 2 budgets."""
+    fail_on_translation_error: bool = False
+    """When ``True``, raise
+    :class:`~epub_commentor.errors.CommentTranslationFailedError` on
+    Stage 3 retry exhaustion. Default ``False`` logs a warning and
+    drops the failed block (``annotation.translation_blocks_skipped`` is
+    incremented; other blocks still get translated) — same dual policy
+    Stage 2 uses via :attr:`fail_on_block_error`."""
+
 
 
 __all__ = ["CommentConfig"]

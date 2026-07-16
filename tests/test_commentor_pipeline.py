@@ -714,3 +714,181 @@ class TestChapterAnnotationFields:
         assert anns[0].has_empty_blocks == 0
         # Placeholder memo still applies.
         assert anns[0].memo.core_thesis.startswith("(chapter skipped")
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — translate_chapters pipeline tests
+# ---------------------------------------------------------------------------
+
+
+class TestTranslateChapters:
+    """End-to-end pipeline-level tests for Stage 3.
+
+    Drive :func:`process_chapters` first to obtain real
+    :class:`ChapterAnnotation` instances, then call
+    :func:`translate_chapters` on them — the same shape
+    :func:`epub_commentor.commentor.comment_epub` uses internally.
+    """
+
+    def _runs_pipeline_then_translates(
+        self,
+        chapter: Chapter,
+        translate_response,
+        *,
+        enable_translation: bool = True,
+        **config_overrides,
+    ):
+        """Run Stage 1+2 with a clean pass, then call Stage 3.
+
+        Returns (anns, translations_skipped).
+        """
+        cfg = CommentConfig(
+            enable_translation=enable_translation,
+            **config_overrides,
+        )
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps({"comments": []}),
+                "translate__response": (
+                    translate_response if isinstance(translate_response, str) else json_dumps(translate_response)
+                ),
+            },
+        )
+        anns, _blocks_skipped = process_chapters([chapter], book_metadata={}, llm=llm, config=cfg)
+        from epub_commentor.pipeline.process import translate_chapters
+
+        translations_skipped = translate_chapters(anns, llm=llm, config=cfg)
+        return anns, translations_skipped
+
+    def test_disabled_no_op(self) -> None:
+        """With ``enable_translation=False`` (default), Stage 3 must not
+        call the LLM at all and leave ``translations`` empty on every
+        chapter."""
+        chapter = _mk_chapter(3)
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps({"comments": []}),
+            },
+        )
+        anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=CommentConfig())
+        from epub_commentor.pipeline.process import translate_chapters
+
+        skipped = translate_chapters(anns, llm=llm, config=CommentConfig())
+        assert skipped == 0
+        assert anns[0].translations == []
+        assert anns[0].translation_blocks_skipped == 0
+        # Stage 3 never ran -> no Stage 3 calls registered
+        assert all(":translate:" not in (call.cache_seed or "") for call in llm.calls)
+
+    def test_enabled_translates_every_paragraph(self) -> None:
+        """A 3-paragraph chapter with ``enable_translation=True`` produces
+        three absolute-p_id translations whose texts mirror the source."""
+        chapter = _mk_chapter(3)
+        anns, skipped = self._runs_pipeline_then_translates(
+            chapter,
+            translate_response={
+                "translations": [
+                    {"p_id": 0, "text": "T0"},
+                    {"p_id": 1, "text": "T1"},
+                    {"p_id": 2, "text": "T2"},
+                ]
+            },
+        )
+        assert skipped == 0
+        assert [tr.p_id for tr in anns[0].translations] == [0, 1, 2]
+        assert [tr.text for tr in anns[0].translations] == ["T0", "T1", "T2"]
+
+    def test_block_local_p_ids_shifted_across_multiple_blocks(self) -> None:
+        """``block_size=2`` over 6 paragraphs -> 3 blocks (start 0, 2, 4).
+        Each block-local p_id 0,1 must be turned into absolute 0,1 / 2,3 /
+        4,5 across the chapter."""
+        chapter = _mk_chapter(6)
+        anns, skipped = self._runs_pipeline_then_translates(
+            chapter,
+            translate_response={
+                "translations": [
+                    {"p_id": 0, "text": "t0"},
+                    {"p_id": 1, "text": "t1"},
+                ]
+            },
+            block_size=2,
+            concurrency=2,
+        )
+        assert skipped == 0
+        # 2 entries * 3 blocks = 6 translations
+        assert len(anns[0].translations) == 6
+        # All six absolute slots filled
+        assert sorted(tr.p_id for tr in anns[0].translations) == [0, 1, 2, 3, 4, 5]
+
+    def test_soft_skip_block_failure_does_not_block_other_translations(self) -> None:
+        """With ``fail_on_translation_error=False`` (default), a Stage 3
+        block whose LLM response can never be parsed is counted but the
+        chapter's other blocks still produce translations."""
+        chapter = _mk_chapter(4)
+        cfg = CommentConfig(
+            enable_translation=True,
+            block_size=1,
+            concurrency=2,
+            max_translation_retries=1,
+        )
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps({"comments": []}),
+                "translate__response": json_dumps({"translations": [{"p_id": 0, "text": "ok"}]}),
+            },
+            default_response="not-json",
+        )
+        # Force the FIRST Stage 3 call to fail so a known block is bad;
+        # the rest run cleanly.
+        real_route = llm._route
+        first_done = {"v": False}
+
+        def fail_first_route(seed, messages):
+            if (seed or "").find(":translate:") >= 0 and not first_done["v"]:
+                first_done["v"] = True
+                return "not-json"
+            return real_route(seed, messages)
+
+        llm._route = fail_first_route  # type: ignore[assignment]
+        anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=cfg)
+        from epub_commentor.pipeline.process import translate_chapters
+
+        skipped = translate_chapters(anns, llm=llm, config=cfg)
+        # 1 block (out of 4) was dropped
+        assert skipped == 1
+        assert anns[0].translation_blocks_skipped == 1
+        # The other 3 blocks contributed one translation each
+        assert len(anns[0].translations) == 3
+
+    def test_hard_fail_raises_translation_failed(self) -> None:
+        """``fail_on_translation_error=True`` surfaces the Stage 3 block
+        failure as :class:`CommentTranslationFailedError` instead of
+        swallowing it."""
+        from epub_commentor.errors import CommentTranslationFailedError
+
+        chapter = _mk_chapter(2)
+        cfg = CommentConfig(
+            enable_translation=True,
+            block_size=1,
+            concurrency=1,
+            max_translation_retries=1,
+            fail_on_translation_error=True,
+        )
+        llm = MockLLM(
+            responses_by_seed={
+                "scan__response": _memo_json(),
+                "annotate__response": json_dumps({"comments": []}),
+            },
+            default_response="not-json",
+        )
+        # Drive Stage 1+2 to get a real annotation so translate_chapters
+        # can attach Stage 3 results to it; then immediately call
+        # Stage 3 in strict mode.
+        anns, _ = process_chapters([chapter], book_metadata={}, llm=llm, config=cfg)
+        from epub_commentor.pipeline.process import translate_chapters
+
+        with pytest.raises(CommentTranslationFailedError):
+            translate_chapters(anns, llm=llm, config=cfg)

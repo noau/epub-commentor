@@ -75,6 +75,7 @@ class TestBuildConfig:
             rpm_limit=None,
             tpm_limit=None,
             request_concurrency=None,
+            enable_translation=False,
         )
         cfg = _build_config(ns)
         assert isinstance(cfg, CommentConfig)
@@ -84,6 +85,8 @@ class TestBuildConfig:
         assert cfg.fail_on_empty_chapter is False
         assert cfg.fail_on_block_error is False
         assert cfg.skip_chapter_on_empty_annotation is False
+        # Stage 3 is opt-in; defaults to False
+        assert cfg.enable_translation is False
 
     def test_all_overrides_applied(self) -> None:
         ns = argparse.Namespace(
@@ -104,6 +107,7 @@ class TestBuildConfig:
             rpm_limit=30,
             tpm_limit=100000,
             request_concurrency=2,
+            enable_translation=True,
         )
         cfg = _build_config(ns)
         assert cfg.book_synopsis == "A book"
@@ -118,6 +122,7 @@ class TestBuildConfig:
         assert cfg.fail_on_empty_chapter is True
         assert cfg.fail_on_block_error is True
         assert cfg.skip_chapter_on_empty_annotation is True
+        assert cfg.enable_translation is True
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +186,7 @@ class TestArgparseParser:
                 "--fail-on-empty-chapter",
                 "--fail-on-block-error",
                 "--skip-chapter-on-empty-annotation",
+                "--enable-translation",
                 "--quiet",
                 "--interactive",
                 "--review",
@@ -211,6 +217,7 @@ class TestArgparseParser:
         assert ns.fail_on_empty_chapter is True
         assert ns.fail_on_block_error is True
         assert ns.skip_chapter_on_empty_annotation is True
+        assert ns.enable_translation is True
         assert ns.quiet is True
         assert ns.interactive is True
         assert ns.review is True
@@ -698,7 +705,7 @@ class TestBuildChapterFilter:
             cb = _build_chapter_filter(ns)
             assert cb is not None and callable(cb)
             chapters = [_mk_chapter_stub(i) for i in range(3)]
-            mask = cb(chapters)
+            mask = cb(chapters, {})
             assert mask == [True, False, True]
             assert mock_selection.called
 
@@ -716,8 +723,7 @@ class TestBuildChapterFilter:
             assert cb is not None
             # Use the same stub content as `_mk_chapter_stub` ("p0", "p1", ...)
             chapters = [_mk_chapter_stub(i) for i in range(3)]
-            cb(chapters)
-
+            cb(chapters, {})
             # rich_selector.Selection was called once with (header, choices).
             assert mock_selection.called
             args, _ = mock_selection.call_args
@@ -754,7 +760,7 @@ class TestBuildChapterFilter:
             assert cb is not None
             chapters = [_mk_chapter_stub(i) for i in range(3)]
             with pytest.raises(SystemExit) as ei:
-                cb(chapters)
+                cb(chapters, {})
             assert ei.value.code == 130
             mock_exit.assert_called_once_with(130)
 
@@ -773,7 +779,7 @@ class TestBuildChapterFilter:
             assert cb is not None
             chapters = [_mk_chapter_stub(i) for i in range(3)]
             with pytest.raises(SystemExit) as ei:
-                cb(chapters)
+                cb(chapters, {})
             assert ei.value.code == 130
             mock_exit.assert_called_once_with(130)
 
@@ -875,7 +881,7 @@ class TestBuildAnnotationFilter:
             assert cb is not None
             annotations = [_mk_annotation_stub(i) for i in range(3)]
             # No skips, no empty → no picker call, mask is all-True.
-            mask = cb(annotations)
+            mask = cb(annotations, {})
             assert mask == [True, True, True]
 
     def test_smart_trigger_fires_on_skipped_blocks(self) -> None:
@@ -892,7 +898,7 @@ class TestBuildAnnotationFilter:
                 _mk_annotation_stub(1),
                 _mk_annotation_stub(2),
             ]
-            cb(annotations)
+            cb(annotations, {})
             assert mock_selection.called
 
     def test_smart_trigger_fires_on_empty_blocks(self) -> None:
@@ -905,7 +911,7 @@ class TestBuildAnnotationFilter:
             cb = _build_annotation_filter(ns)
             assert cb is not None
             annotations = [_mk_annotation_stub(0, has_empty_blocks=1)]
-            cb(annotations)
+            cb(annotations, {})
             assert mock_selection.called
 
     def test_force_review_always_opens_picker(self) -> None:
@@ -919,7 +925,7 @@ class TestBuildAnnotationFilter:
             cb = _build_annotation_filter(ns)
             assert cb is not None
             annotations = [_mk_annotation_stub(0)]  # no skips, no empty
-            cb(annotations)
+            cb(annotations, {})
             assert mock_selection.called
 
     def test_selection_cancelled_exits_130(self) -> None:
@@ -935,7 +941,7 @@ class TestBuildAnnotationFilter:
             cb = _build_annotation_filter(ns)
             assert cb is not None
             with pytest.raises(SystemExit) as ei:
-                cb([_mk_annotation_stub(0, skipped_blocks=1)])
+                cb([_mk_annotation_stub(0, skipped_blocks=1)], {})
             assert ei.value.code == 130
             mock_exit.assert_called_once_with(130)
 
@@ -950,7 +956,7 @@ class TestBuildAnnotationFilter:
             cb = _build_annotation_filter(ns)
             assert cb is not None
             with pytest.raises(SystemExit) as ei:
-                cb([_mk_annotation_stub(0, skipped_blocks=1)])
+                cb([_mk_annotation_stub(0, skipped_blocks=1)], {})
             assert ei.value.code == 130
             mock_exit.assert_called_once_with(130)
 

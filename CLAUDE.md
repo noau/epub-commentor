@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 用户向文档:[README.md](README.md) / [README_zh-CN.md](README_zh-CN.md)(安装、CLI flag、provider 表、FAQ)
 - 原项目文档:<https://github.com/oomol-lab/epub-translator>
 - Python `>=3.13,<3.14`,依赖管理使用 Poetry
-- 进度:M1–M9 完成(包重命名 / 两阶段 LLM / 注入 / 校验 / 测试 / CLI / 进度条 + debug 日志 / 交互式章节选择 / AI 批处理闸口),M7b 真实 LLM 联调 ⏳
+- 进度:M1–M9 完成(包重命名 / 两阶段 LLM / 注入 / 校验 / 测试 / CLI / 进度条 + debug 日志 / 交互式章节选择 / AI 批处理闸口),M10 可选 Stage 3 段落翻译完成,M7b 真实 LLM 联调 ⏳
 
 ## 常用命令
 
@@ -49,10 +49,10 @@ poetry run pyright epub_commentor
 
 ## 架构 — pipeline 形状
 
-整体流程:**EPUB 解压 → 按 spine 顺序逐章解析 XML → [Stage 1 全章扫读 → LLM → ChapterMemo] → [Stage 2 6 段切块 → LLM → BlockAnnotation × N 块] → DOM 注入 `<aside>` → 注入 commentary.css + 改 OPF + 改 chapter `<head>` → 写回 EPUB**。
+整体流程:**EPUB 解压 → 按 spine 顺序逐章解析 XML → [Stage 1 全章扫读 → LLM → ChapterMemo] → [Stage 2 6 段切块 → LLM → BlockAnnotation × N 块] → [可选 Stage 3 段落翻译 → LLM → BlockTranslation × N 块] → DOM 注入 `<aside>` + `<p class="translation">` → 注入 commentary.css + 改 OPF + 改 chapter `<head>` → 写回 EPUB**。
 
 - **三层流水线**:`extract → process → inject`,由 `comment_epub()` 编排,阶段汇报顺序固定。
-- **两阶段 LLM**:Stage 1 章间串行(`scan_chapter()`),Stage 2 章内 `ThreadPoolExecutor` 并行(`annotate_block()`)。
+- **两阶段 LLM + 可选翻译**:Stage 1 章间串行(`scan_chapter()`),Stage 2 章内 `ThreadPoolExecutor` 并行(`annotate_block()`),Stage 3(可选,`--enable-translation`)镜像 Stage 2 的并发/缓存/限流,翻译结果随 `inject_chapter` 一次注入。
 - **三种 filter 闸口**: `ChapterFilter`(pre-select,`-i` / `--ai-select` / 不指定) + `AnnotationFilter`(post-review,`--review` / `--ai-review` / `--no-review` / 不指定)。两层都签名 `Callable[[list, dict[str, str]], list[bool]]`,第二个参数是已剥离 `__opf_path__` 的书级 metadata。
 
 ## 子包职责
@@ -60,20 +60,20 @@ poetry run pyright epub_commentor
 不列举每个文件,只描述形状。具体模块从源码读。
 
 - **`epub_commentor/` 根**: 公开 API(`__init__.py` 一站式 re-export)+ `CommentConfig`(`config.py`)+ `CommentorError` 异常层级(`errors.py`,8 个公共类,7 个 `CommentorError` 子类 + 1 个 `CommentAbortError(KeyboardInterrupt)`)+ 顶层 `comment_epub`(`commentor.py`)+ `progress.py`(3 个显示器)+ `logging_setup.py` 根 logger。
-- **`epub_commentor/llm/`**: 单 `LLM` 客户端(`core.py`)+ 缓存/调试(`context.py` / `_debug_logger.py`)+ 限流/中止(`rate_limiter.py` / `_abort.py`)+ 两阶段编排(`memo.py` / `block.py`)+ AI 闸口(`select.py` / `review.py`)+ pydantic schema(`schema.py`)+ `_salvage.py` 部分成功恢复。
+- **`epub_commentor/llm/`**: 单 `LLM` 客户端(`core.py`)+ 缓存/调试(`context.py` / `_debug_logger.py`)+ 限流/中止(`rate_limiter.py` / `_abort.py`)+ 两阶段编排 + 可选翻译(`memo.py` / `block.py` / `translate.py`)+ AI 闸口(`select.py` / `review.py`)+ pydantic schema(`schema.py`)+ `_salvage.py` 部分成功恢复。
 - **`epub_commentor/pipeline/`**: `extract.py`(spine + body 解析 + 三层 title 启发式)/ `process.py`(Stage 1+2 串并编排 + `process_chapters` 返回 `tuple[list[ChapterAnnotation], int]`)/ `inject.py`(aside 构造 + parent_map 找 body 直接子元素 + OPF/CSS 幂等注入 + 两阶段提交:先 CSS+OPF 后章节)。
 - **`epub_commentor/epub/` + `epub_commentor/xml/`**: 底层 EPUB 操作(`zip.py` 同持源/目标两个 `ZipFile`,`add()` 注入新文件)+ 自研 XML 解析器(`xml_like.py` 记录 namespace 序列化还原 + `deduplication.py` 评注注入后调一次避免与原书 id 冲突)。
 
 ## 测试结构
 
-`tests/_mock_llm.py` — 公共 `MockLLM` fixture,按 cache seed 前缀(`:scan:` / `:annotate:` / `:select:` / `:review:`)分发预制 JSON,带 `calls` 日志供断言;`log_dir_path` 参数让单元测试也能断言 `[[StageError]]` / `[[CacheCheck]]` 日志段。
+`tests/_mock_llm.py` — 公共 `MockLLM` fixture,按 cache seed 前缀(`:scan:` / `:annotate:` / `:translate:` / `:select:` / `:review:`)分发预制 JSON,带 `calls` 日志供断言;`log_dir_path` 参数让单元测试也能断言 `[[StageError]]` / `[[CacheCheck]]` 日志段。
 
-26 个测试文件按 area 划分(不逐文件列举):
+27 个测试文件按 area 划分(不逐文件列举):
 
 | Area | 覆盖 | 文件数 |
 |---|---|---|
 | 原 EPUB / XML / Math | 解析、namespace、自闭合、spine、toc、metadata、math | 6 |
-| 流水线 + AI 闸口 + salvage / abort / cache / review | extract / schema / errors / block / inject / pipeline / select / ai_review / review / salvage / abort / cache | 12 |
+| 流水线 + AI 闸口 + salvage / abort / cache / review / translate | extract / schema / errors / block / inject / pipeline / select / ai_review / review / salvage / abort / cache / translate | 13 |
 | 日志 / 进度 / 限流 / API key | log / progress_noop / logging_setup / rate_limiter / api_key | 5 |
 | CLI / CSS / E2E | CLI / CSS 字节校验 / 真实《小王子》E2E | 3 |
 
@@ -111,9 +111,10 @@ AI 评注定位为**页边的陪伴者**,不是居高临下的解释者。三种
 - 改 `epub_commentor/data/*.jinja` → 跑 `scripts/comment_challenge.py`(13 case 全过)
 - 改 `pipeline/inject.py` → 跑 `tests/test_commentor_inject.py` + `tests/test_xml_like.py`(DOM 操作 + namespace 还原)
 - 改 `pipeline/process.py` 切组逻辑 → 跑 `tests/test_commentor_block.py` + `tests/test_commentor_pipeline.py`(边界 case:最后一批短、单章无 `<p>`、`<p>` 嵌套、retry)
-- 改 `llm/schema.py` pydantic 模型 → 跑 `tests/test_commentor_schema.py`(连续性、重叠、范围检查)
+- 改 `llm/schema.py` pydantic 模型 → 跑 `tests/test_commentor_schema.py` + `tests/test_commentor_translate.py::TestTranslateSchema`(连续性、重叠、范围检查)
 - 改 `cli.py` flag / filter → 跑 `tests/test_commentor_cli.py::TestBuildChapterFilter` + `TestBuildAiChapterFilter` + `TestBuildAiAnnotationFilter`(互斥矩阵)
 - 改 AI 闸口提示词 → 跑 `tests/test_commentor_select.py` + `tests/test_commentor_ai_review.py` HappyPath,再跑 `scripts/comment_challenge.py` 确认无回归
+- 改 `llm/translate.py` / `data/translate.jinja` → 跑 `tests/test_commentor_translate.py`(21 个测试,覆盖单块 / schema / chapter 编排 / seed 格式)
 
 ## 关键设计要点(摘要)
 
@@ -124,3 +125,4 @@ AI 评注定位为**页边的陪伴者**,不是居高临下的解释者。三种
 - **CSS 自动集成幂等**:三步 ① `Zip.add(css_path_in_epub, bytes)` ② 改 OPF `<manifest>` 加 `<item id="commentary-css">`(已存在则跳过)③ 每章 `<head>` 加 `<link rel="stylesheet">`(已存在则跳过)
 - **单章无 `<p>` 容错**:`len(body.iter("p")) == 0` → 默认 log warning + 返回占位 memo;`config.fail_on_empty_chapter=True` 抛 `CommentNoParagraphsError`
 - **mimetype 顺序**:`Zip.__exit__` 确保 mimetype 是 ZIP 的第一个 entry
+- **Stage 3 可选翻译**:默认关闭(`enable_translation=False`),开启后镜像 Stage 2 的 chunker/并发/缓存/限流。翻译失败默认软跳过(warn + counter),`fail_on_translation_error=True` 切硬失败。注入与 aside 合并在 `inject_chapter` 一次 DOM pass 内完成(高→低 p_id 遍历避免索引偏移),不另起顶层函数。cache seed 用 `:translate:` 前缀与 `:annotate:` 隔离

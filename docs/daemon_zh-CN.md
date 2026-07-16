@@ -447,6 +447,7 @@ poetry run epubctl submit ~/books/long.epub --flags '{
   "concurrency": 2,
   "block_size": 8,
   "target_language": "English",
+  "enable_translation": true,
   "book_synopsis": "A philosophical fairy tale.",
   "cache_seed_user_id": "long-book-v1",
   "fail_on_empty_chapter": false

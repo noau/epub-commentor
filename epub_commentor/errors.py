@@ -87,6 +87,25 @@ class CommentReviewFailedError(CommentorError):
     """
 
 
+class CommentTranslationInvalidJSONError(CommentorError):
+    """Stage 3 could not produce a valid :class:`BlockTranslation` JSON.
+
+    Symmetric with :class:`CommentInvalidJSONError` (Stage 2). The
+    Stage 3 retry budget is independent (``config.max_translation_retries``)
+    so a flaky translation provider does not poison Stage 2 cache entries.
+    """
+
+
+class CommentTranslationFailedError(CommentorError):
+    """Stage 3 retry exhaustion with no salvageable translations.
+
+    Mirrors the strict-raise mode of :class:`CommentInvalidJSONError`
+    but for the translation stage. Only raised when
+    ``config.fail_on_translation_error`` is ``True``; otherwise the
+    failed block is dropped and ``ChapterAnnotation.translation_blocks_skipped``
+    is incremented, identical to Stage 2's default soft-skip policy.
+    """
+
 class CommentAbortError(KeyboardInterrupt):
     """The user pressed Ctrl-C during the pipeline.
 
@@ -112,5 +131,5 @@ __all__ = [
     "CommentReviewFailedError",
     "CommentScanFailedError",
     "CommentSelectFailedError",
-    "CommentorError",
+    "CommentTranslationFailedError",
 ]

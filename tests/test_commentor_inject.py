@@ -180,7 +180,7 @@ class TestInjectComment:
         assert list(body)[3].tag == "p"
         assert list(body)[3].text == "3"
 
-    def test_nested_p_lands_outside_blockquote(self) -> None:
+    def test_nested_p_lands_next_to_target_p(self) -> None:
         _, body = _make_chapter(
             "<html><body><p>before</p><blockquote><div><p>target</p></div></blockquote><p>after</p></body></html>"
         )
@@ -188,14 +188,24 @@ class TestInjectComment:
         assert target is not None
         pm = _build_parent_map(body)
         inject_comment(body, target, CommentPosition.BEFORE, CommentKind.NOTE, "n", "c2", pm)
-        # <aside> should sit BETWEEN <p>before and <blockquote>
-        kids = list(body)
-        assert kids[0].tag == "p"
-        assert kids[0].text == "before"
-        assert kids[1].tag == "aside"
-        assert kids[2].tag == "blockquote"
-        assert kids[3].tag == "p"
-        assert kids[3].text == "after"
+        # <aside> lands inside the <div>, right before the target <p>.
+        # No longer walks up to the body-direct ancestor (<blockquote>);
+        # instead stays at the target's immediate parent so that comments
+        # never cluster at chapter boundaries when all <p>s share a
+        # single wrapper element.
+        div = find_first(body, "div")
+        assert div is not None
+        div_kids = list(div)
+        assert div_kids[0].tag == "aside"
+        assert div_kids[1].tag == "p"
+        assert div_kids[1].text == "target"
+        # Body-level siblings unchanged
+        body_kids = list(body)
+        assert body_kids[0].tag == "p"
+        assert body_kids[0].text == "before"
+        assert body_kids[1].tag == "blockquote"
+        assert body_kids[2].tag == "p"
+        assert body_kids[2].text == "after"
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +313,184 @@ class TestChapterSplice:
         assert len(bare) == 1
         # the <p> got renamed — it now carries a __translated suffix
         assert any("__translated" in (i or "") for i in para_ids)
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — translation injection (combined with aside splice in inject_chapter)
+# ---------------------------------------------------------------------------
+
+
+class TestTranslationInject:
+    """inject_chapter splices translations in the same pass as asides.
+
+    When Stage 3 is enabled, every paragraph covered by a
+    :class:`~epub_commentor.llm.schema.ParagraphTranslation` receives a
+    sibling <p class="translation"> immediately AFTER the original.
+    The original paragraph is never modified or removed.
+    """
+
+    def _build_chapter_with_paragraphs(self, n: int) -> Chapter:
+        body_xml = "".join(f"<p>p{i}</p>" for i in range(n))
+        root = _parse_root(f"<html><head></head><body>{body_xml}</body></html>")
+        body = find_first(root, "body")
+        xml_node = XMLLikeNode(
+            __import__("io").BytesIO(b"<html></html>"),
+            is_html_like=True,
+        )
+        xml_node.element = root
+        return Chapter(path=Path("ch.xhtml"), title="ch", body=body, xml_node=xml_node)
+
+    def _build_nested_chapter(self) -> Chapter:
+        body_xml = "<blockquote><div><p>Inner</p></div></blockquote>"
+        root = _parse_root(f"<html><head></head><body>{body_xml}</body></html>")
+        body = find_first(root, "body")
+        xml_node = XMLLikeNode(
+            __import__("io").BytesIO(b"<html></html>"),
+            is_html_like=True,
+        )
+        xml_node.element = root
+        return Chapter(path=Path("ch.xhtml"), title="ch", body=body, xml_node=xml_node)
+
+    def _make_translation(self, p_id: int, text: str):
+        from epub_commentor.llm.schema import ParagraphTranslation
+
+        return ParagraphTranslation(p_id=p_id, text=text)
+
+    def test_inject_translation_inserts_after_each_paragraph(self) -> None:
+        chapter = self._build_chapter_with_paragraphs(3)
+        ann = ChapterAnnotation(
+            chapter=chapter,
+            memo=None,  # type: ignore[arg-type]
+            comments=[],
+            translations=[
+                self._make_translation(0, "T0"),
+                self._make_translation(1, "T1"),
+                self._make_translation(2, "T2"),
+            ],
+        )
+        inject_chapter(ann)
+        ps = list(chapter.body.iter("p"))
+        assert [p.text for p in ps] == ["p0", "T0", "p1", "T1", "p2", "T2"]
+
+    def test_inject_translation_preserves_original_paragraphs(self) -> None:
+        chapter = self._build_chapter_with_paragraphs(2)
+        ann = ChapterAnnotation(
+            chapter=chapter,
+            memo=None,  # type: ignore[arg-type]
+            comments=[],
+            translations=[
+                self._make_translation(0, "T0"),
+                self._make_translation(1, "T1"),
+            ],
+        )
+        inject_chapter(ann)
+        ps = list(chapter.body.iter("p"))
+        original_ps = [p for p in ps if (p.text or "").startswith("p")]
+        assert len(original_ps) == 2
+        assert original_ps[0].text == "p0"
+        assert original_ps[1].text == "p1"
+
+    def test_inject_translation_nested_p_in_blockquote(self) -> None:
+        chapter = self._build_nested_chapter()
+        ann = ChapterAnnotation(
+            chapter=chapter,
+            memo=None,  # type: ignore[arg-type]
+            comments=[],
+            translations=[self._make_translation(0, "Inside")],
+        )
+        inject_chapter(ann)
+        ps = list(chapter.body.iter("p"))
+        assert [p.text for p in ps] == ["Inner", "Inside"]
+        # second <p> is the translation
+        assert ps[1].get("class") == "translation"
+
+    def test_inject_translation_no_op_when_empty(self) -> None:
+        chapter = self._build_chapter_with_paragraphs(3)
+        ann = ChapterAnnotation(
+            chapter=chapter,
+            memo=None,
+            comments=[],
+            translations=[],
+        )
+        inject_chapter(ann)
+        ps = list(chapter.body.iter("p"))
+        assert [p.text for p in ps] == ["p0", "p1", "p2"]
+
+    def test_inject_translation_out_of_range_p_id_skipped(self) -> None:
+        chapter = self._build_chapter_with_paragraphs(2)
+        ann = ChapterAnnotation(
+            chapter=chapter,
+            memo=None,  # type: ignore[arg-type]
+            comments=[],
+            translations=[
+                self._make_translation(0, "T0"),
+                self._make_translation(99, "BAD"),  # out of range — skipped
+            ],
+        )
+        inject_chapter(ann)
+        ps = list(chapter.body.iter("p"))
+        assert [p.text for p in ps] == ["p0", "T0", "p1"]
+
+    def test_inject_translation_alongside_aside_keeps_natural_order(self) -> None:
+        """BEFORE-aside → original <p> → <p.translation> → AFTER-aside."""
+        chapter = self._build_chapter_with_paragraphs(1)
+        comments = [
+            CommentItem(
+                target_p_ids=[0],
+                position=CommentPosition.BEFORE,
+                kind=CommentKind.INTRO,
+                content="Before-aside",
+            ),
+            CommentItem(
+                target_p_ids=[0],
+                position=CommentPosition.AFTER,
+                kind=CommentKind.SUMMARY,
+                content="After-aside",
+            ),
+        ]
+        ann = ChapterAnnotation(
+            chapter=chapter,
+            memo=None,  # type: ignore[arg-type]
+            comments=comments,
+            translations=[self._make_translation(0, "T0")],
+        )
+        inject_chapter(ann)
+
+        # Walk body's DIRECT children (not .iter() — that descends into asides
+        # and finds inner <p>s that aren't part of the natural prose flow).
+        # The expected DOM order, reading direct children left-to-right:
+        #   aside(intro "Before-aside")  →  <p>p0</p>  →  <p class="translation">T0</p>  →  aside(summary "After-aside")
+        # Direct children of body, in order; label them by tag + a compact
+        # representation of content. Avoid .iter() — that descends into
+        # asides' inner <p>s.
+        def _compact(el) -> str:
+            text = (el.text or "").strip()
+            cls = (el.get("class") or "").strip()
+            tag = el.tag.split("}", 1)[-1] if "}" in el.tag else el.tag
+            if tag == "aside":
+                # Asides may contain <p>s with content; pick the first non-empty
+                # text node for a stable label.
+                chunks = [t.strip() for t in el.itertext() if t.strip()]
+                inner = chunks[0][:12] if chunks else ""
+                return f"aside:{inner}"
+            return f"{tag}({cls})={text[:12]}"
+
+        ordered = [_compact(c) for c in list(chapter.body)]
+        # Locate the four elements by content; verify their relative indices.
+        try:
+            intro_idx = ordered.index("aside:Before-aside")
+            orig_idx = next(
+                i
+                for i, label in enumerate(ordered)
+                if label.startswith("p(") and "p0" in label and "translation" not in label
+            )
+            trans_idx = next(i for i, label in enumerate(ordered) if "translation" in label and "T0" in label)
+            after_idx = ordered.index("aside:After-aside")
+        except (ValueError, StopIteration) as exc:
+            self.fail(f"required elements not found in body direct children: {ordered} ({exc})")
+        assert intro_idx < orig_idx < trans_idx < after_idx, (
+            f"order broken: {[(i, label) for i, label in enumerate(ordered)]}"
+        )
 
 
 # ---------------------------------------------------------------------------
